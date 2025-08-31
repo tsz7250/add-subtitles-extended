@@ -109,9 +109,11 @@ class FileValidator {
         const sequenceNumber = parseInt(firstBlock[0]);
         if (isNaN(sequenceNumber)) return false;
         
-        // Check time format - allow both single and double digit hours
-        const timePattern = /^\d{1,2}:\d{2}:\d{2},\d{3}\s*-->\s*\d{1,2}:\d{2}:\d{2},\d{3}$/;
-        return timePattern.test(firstBlock[1]);
+        // Check time format - more flexible pattern to handle standard SRT format
+        // Support formats like: 00:00:39,131 --> 00:00:40,299
+        const timePattern = /^\d{2}:\d{2}:\d{2},\d{3}\s*-->\s*\d{2}:\d{2}:\d{2},\d{3}$/;
+        const hasValidTimeline = firstBlock.some(line => timePattern.test(line.trim()));
+        return hasValidTimeline;
     }
 }
 
@@ -679,17 +681,13 @@ class ChineseConverter {
     
     async initOpenCC() {
         try {
-            // Check if OpenCC is already loaded
             if (typeof window.OpenCC !== 'undefined' && window.OpenCC.Converter) {
                 this.setupOpenCC();
                 return;
             }
-            
-            // Wait for local OpenCC script to load completely
             await this.waitForOpenCC();
             this.setupOpenCC();
-        } catch (error) {
-            console.warn('OpenCC initialization failed, subtitles will remain in original text:', error);
+        } catch (_error) {
             this.initialized = true;
         }
     }
@@ -702,12 +700,20 @@ class ChineseConverter {
                 return;
             }
             
+            let attempts = 0;
+            const maxAttempts = 100; // 10 seconds with 100ms intervals (reduced from 15s)
+            
             // Set check interval
             const checkInterval = setInterval(() => {
+                attempts++;
                 if (typeof window.OpenCC !== 'undefined' && window.OpenCC.Converter) {
                     clearInterval(checkInterval);
                     clearTimeout(timeout);
                     resolve();
+                } else if (attempts >= maxAttempts) {
+                    clearInterval(checkInterval);
+                    clearTimeout(timeout);
+                    reject(new Error('OpenCC load timeout after ' + (maxAttempts * 100) + 'ms'));
                 }
             }, 100);
             
@@ -718,16 +724,29 @@ class ChineseConverter {
             }, 10000);
         });
     }
+    // Manual reload removed in cleanup
     
     setupOpenCC() {
         try {
+            // Check browser compatibility
+            if (!window.OpenCC || typeof window.OpenCC.Converter !== 'function') {
+                throw new Error('OpenCC.Converter is not a function or not available');
+            }
+            
             // Create Simplified to Traditional Chinese converter using correct API
             this.converter = window.OpenCC.Converter({ from: 'cn', to: 'tw' });
-            this.openccLoaded = true;
+            // Test the converter
+            const testResult = this.converter('测试');
+            
+            // Check if conversion is working
+            if (testResult !== '测试') {
+                this.openccLoaded = true;
+            } else {
+                this.openccLoaded = false;
+            }
+            
             this.initialized = true;
-            console.log('OpenCC converter initialized successfully');
         } catch (error) {
-            console.error('OpenCC converter initialization failed:', error);
             this.initialized = true;
         }
     }
@@ -1878,20 +1897,29 @@ shadow_root.getElementById("subtitle_upload_button").addEventListener("click", a
     const progressIndicator = new ProgressIndicator(progress_container);
     
     try {
+        let fileName = "";
+        
         if(subtitle_url_input.value.length > 0){
             await handleUrlUpload(subtitle_url_input.value, progressIndicator);
+            fileName = subtitle_url_input.value.split('/').pop() || subtitle_url_input.value;
+            subtitle_url_input.value = ""; // Clear URL input after success
         } else {
-            await handleFileUpload(subtitle_file_input.files[0], progressIndicator);
+            const selectedFile = subtitle_file_input.files[0];
+            await handleFileUpload(selectedFile, progressIndicator);
+            fileName = selectedFile.name;
+            // Don't clear file input - keep showing the loaded file name
         }
         
-        // Cleanup after success
         progressIndicator.hide();
-        subtitle_file_input.value = "";
-        subtitle_url_input.value = "";
+        
+        // Show success message with file name
+        error_message_element.textContent = `Loaded: ${fileName}`;
+        error_message_element.style.color = "green";
         
     } catch (error) {
         progressIndicator.hide();
         handleUploadError(error, error_message_element, retry_button);
+        // Keep file input value when error occurs, so user can see what file was selected
     }
 });
 
@@ -2106,37 +2134,50 @@ shadow_root.getElementById("close_button").addEventListener("click", function(){
 function updateConverterStatus() {
     const statusElement = shadow_root.getElementById("converter_status");
     if (!statusElement) return;
-    
-    const status = chineseConverter.getStatus();
-    
-    if (status.openccLoaded && status.hasConverter) {
-        statusElement.textContent = "OpenCC Loaded";
-        statusElement.style.color = "green";
-    } else if (status.initialized && !status.openccLoaded) {
-        statusElement.textContent = "Fallback Mode (Keep Original)";
-        statusElement.style.color = "orange";
-    } else if (status.initialized) {
-        statusElement.textContent = "Load Failed (Keep Original)";
+    try {
+        if (typeof window.OpenCC !== 'undefined' && typeof window.OpenCC.Converter === 'function') {
+            const testConverter = window.OpenCC.Converter({ from: 'cn', to: 'tw' });
+            const testResult = testConverter('测试');
+            if (testResult !== '测试') {
+                statusElement.textContent = "OpenCC Ready";
+                statusElement.style.color = "green";
+                return;
+            }
+            statusElement.textContent = "FAILED: OpenCC Not Converting";
+            statusElement.style.color = "red";
+            return;
+        }
+        if (typeof window._openccLoadResult !== 'undefined') {
+            const code = window._openccLoadResult;
+            const ok = (code === 'direct_execute_success' || code === 'direct_success');
+            statusElement.textContent = ok ? "OpenCC Ready" : "OpenCC Load Failed";
+            statusElement.style.color = ok ? "green" : "red";
+        } else {
+            statusElement.textContent = "FAILED: OpenCC Not Available";
+            statusElement.style.color = "red";
+        }
+    } catch (_e) {
+        statusElement.textContent = "FAILED: Status Check Error";
         statusElement.style.color = "red";
-    } else {
-        statusElement.textContent = "Loading...";
-        statusElement.style.color = "orange";
     }
 }
 
-// Manually reload converter
+// Simplified reload: ask background to reinject, then refresh status
 shadow_root.getElementById("reload_converter").addEventListener("click", function(){
     const statusElement = shadow_root.getElementById("converter_status");
     statusElement.textContent = "Reloading...";
     statusElement.style.color = "orange";
-    
-    // Create new converter instance and reinitialize properly
-    chineseConverter = new ChineseConverter();
-    
-    // Wait for initialization and update status
-    setTimeout(() => {
-        updateConverterStatus();
-    }, 1000);
+    if (typeof browser !== 'undefined' && browser.runtime) {
+        browser.runtime.sendMessage({ action: 'reinject_opencc' })
+            .then(() => setTimeout(updateConverterStatus, 1200))
+            .catch(() => {
+                statusElement.textContent = "Reload Failed";
+                statusElement.style.color = "red";
+            });
+    } else {
+        statusElement.textContent = "Reload Failed";
+        statusElement.style.color = "red";
+    }
 });
 
 // Periodically update converter status
