@@ -2,6 +2,8 @@
 
 A simple yet powerful Firefox browser extension that allows you to add external subtitle files to any `<video>` element on web pages.
 
+<img src="./pic/demo.png" alt="Demo" height=300>
+
 ## Features
 
 - Support for SRT, VTT, ASS/SSA subtitle formats
