@@ -187,7 +187,32 @@ menu.id = "addsubtitle_menu";
 // Use DOM methods instead of innerHTML
 const closeButton = document.createElement("button");
 closeButton.id = "close_button";
-closeButton.textContent = "Close";
+// SVG Icon for close button
+const closeSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+closeSvg.setAttribute("width", "24");
+closeSvg.setAttribute("height", "24");
+closeSvg.setAttribute("viewBox", "0 0 24 24");
+closeSvg.setAttribute("fill", "none");
+closeSvg.setAttribute("stroke", "currentColor");
+closeSvg.setAttribute("stroke-width", "2");
+closeSvg.setAttribute("stroke-linecap", "round");
+closeSvg.setAttribute("stroke-linejoin", "round");
+
+const line1 = document.createElementNS("http://www.w3.org/2000/svg", "line");
+line1.setAttribute("x1", "18");
+line1.setAttribute("y1", "6");
+line1.setAttribute("x2", "6");
+line1.setAttribute("y2", "18");
+closeSvg.appendChild(line1);
+
+const line2 = document.createElementNS("http://www.w3.org/2000/svg", "line");
+line2.setAttribute("x1", "6");
+line2.setAttribute("y1", "6");
+line2.setAttribute("x2", "18");
+line2.setAttribute("y2", "18");
+closeSvg.appendChild(line2);
+
+closeButton.appendChild(closeSvg);
 menu.appendChild(closeButton);
 
 const line = document.createElement("div");
@@ -283,9 +308,13 @@ subtitle_file_fieldset.appendChild(progressContainer);
 
 menu.appendChild(subtitle_file_fieldset);
 
+// Create grid container for settings
+const settingsGrid = document.createElement("div");
+settingsGrid.id = "settings_grid";
+
 var subtitle_offset_line = document.createElement("div");
-subtitle_offset_line.className = "line";
-subtitle_offset_line.appendChild(document.createTextNode("Time offset: "));
+subtitle_offset_line.className = "line grid-item";
+subtitle_offset_line.appendChild(document.createTextNode("Time offset (s): "));
 
 var subtitle_offset_input = document.createElement("input");
 subtitle_offset_input.type = "number";
@@ -293,32 +322,29 @@ subtitle_offset_input.step = "0.01";
 subtitle_offset_input.id = "subtitle_offset_input";
 subtitle_offset_input.value = "0";
 subtitle_offset_line.appendChild(subtitle_offset_input);
-subtitle_offset_line.appendChild(document.createTextNode(" seconds"));
 
 var position_offset_line = document.createElement("div");
-position_offset_line.className = "line";
-position_offset_line.appendChild(document.createTextNode("Position offset: "));
+position_offset_line.className = "line grid-item";
+position_offset_line.appendChild(document.createTextNode("Position offset (px): "));
 
 var subtitle_offset_top_input = document.createElement("input");
 subtitle_offset_top_input.type = "number";
 subtitle_offset_top_input.id = "subtitle_offset_top_input";
 subtitle_offset_top_input.value = "-100";
 position_offset_line.appendChild(subtitle_offset_top_input);
-position_offset_line.appendChild(document.createTextNode(" px"));
 
 var subtitle_font_size_line = document.createElement("div");
-subtitle_font_size_line.className = "line";
-subtitle_font_size_line.appendChild(document.createTextNode("Font size: "));
+subtitle_font_size_line.className = "line grid-item";
+subtitle_font_size_line.appendChild(document.createTextNode("Font size (px): "));
 
 var subtitle_font_size_input = document.createElement("input");
 subtitle_font_size_input.type = "number";
 subtitle_font_size_input.id = "subtitle_font_size";
 subtitle_font_size_input.value = "26";
 subtitle_font_size_line.appendChild(subtitle_font_size_input);
-subtitle_font_size_line.appendChild(document.createTextNode(" px"));
 
 var subtitle_font_line = document.createElement("div");
-subtitle_font_line.className = "line";
+subtitle_font_line.className = "line grid-item";
 subtitle_font_line.appendChild(document.createTextNode("Font: "));
 
 var subtitle_font_input = document.createElement("input");
@@ -328,7 +354,7 @@ subtitle_font_input.value = "Arial";
 subtitle_font_line.appendChild(subtitle_font_input);
 
 var subtitle_font_color_line = document.createElement("div");
-subtitle_font_color_line.className = "line";
+subtitle_font_color_line.className = "line grid-item";
 subtitle_font_color_line.appendChild(document.createTextNode("Font color: "));
 
 var subtitle_font_color_input = document.createElement("input");
@@ -338,7 +364,7 @@ subtitle_font_color_input.value = "rgba(255, 255, 255, 1)";
 subtitle_font_color_line.appendChild(subtitle_font_color_input);
 
 var subtitle_background_color_line = document.createElement("div");
-subtitle_background_color_line.className = "line";
+subtitle_background_color_line.className = "line grid-item";
 subtitle_background_color_line.appendChild(document.createTextNode("Background color: "));
 
 var subtitle_background_color_input = document.createElement("input");
@@ -347,12 +373,14 @@ subtitle_background_color_input.id = "subtitle_background_color";
 subtitle_background_color_input.value = "rgba(0, 0, 0, 0.7)";
 subtitle_background_color_line.appendChild(subtitle_background_color_input);
 
-menu.appendChild(subtitle_offset_line);
-menu.appendChild(position_offset_line);
-menu.appendChild(subtitle_font_size_line);
-menu.appendChild(subtitle_font_line);
-menu.appendChild(subtitle_font_color_line);
-menu.appendChild(subtitle_background_color_line);
+settingsGrid.appendChild(subtitle_offset_line);
+settingsGrid.appendChild(position_offset_line);
+settingsGrid.appendChild(subtitle_font_size_line);
+settingsGrid.appendChild(subtitle_font_line);
+settingsGrid.appendChild(subtitle_font_color_line);
+settingsGrid.appendChild(subtitle_background_color_line);
+
+menu.appendChild(settingsGrid);
 
 // Add Simplified/Traditional Chinese conversion status display
 var converter_status_line = document.createElement("div");
@@ -380,7 +408,7 @@ shadow.appendChild(menu);
 var style = document.createElement("style");
 style.textContent = `
 #addsubtitle_menu *{
-    font-family: monospace;
+    font-family: system-ui, -apple-system, sans-serif;
     font-size: 12px;
     line-height: normal !important;
     box-sizing: border-box !important;
@@ -433,76 +461,161 @@ style.textContent = `
     0% { transform: translateX(-100%); }
     100% { transform: translateX(100%); }
 }
-button{
+
+button {
     cursor: pointer;
+    background-color: #f0f0f0;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    color: #333;
+    padding: 4px 8px;
+    transition: all 0.2s ease;
 }
-.line{
-    margin-top: 9px;
+
+button:hover {
+    background-color: #e0e0e0;
+    border-color: #bbb;
 }
-#addsubtitle_menu{
+
+button:active {
+    background-color: #d0d0d0;
+    transform: translateY(1px);
+}
+
+.line {
+    margin-top: 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+#addsubtitle_menu {
     z-index: 1000000;
     position: fixed;
     right: 14px;
     bottom: 14px;
-    width: 430px;
-    border: 1px solid black;
-    padding-left: 14px;
-    padding-right: 16px;
-    padding-top: 6px;
-    padding-bottom: 12px;
+    width: 580px;
+    border: none;
+    border-radius: 8px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+    padding: 16px;
     background-color: white;
-    color: black;
+    color: #333;
+    font-family: system-ui, -apple-system, sans-serif;
 }
-button{
-    background-color: white;
-    border: 1px solid black;
-    color: black;
-    padding: 2px;
+
+#settings_grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px 20px;
+    margin-top: 12px;
 }
-button:hover{
-    background-color: #f0f0f0;
+
+.grid-item {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-top: 0 !important;
+    align-items: flex-start !important;
 }
-button:active{
-    background-color: #ddd;
-}
-input[type="file"]{
+
+input[type="file"] {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
     width: 100%;
+    padding: 4px 0;
 }
-input:not([type="file"]){
-    border: 1px solid black;
-    height: 18px;
-    width: 200px;
+
+input:not([type="file"]) {
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    height: 30px;
+    width: 100%;
+    padding: 0 8px;
+    box-sizing: border-box !important;
 }
-#video_elements_list{
-    margin-top: 8px;
+
+#video_elements_list {
+    margin-top: 12px;
     padding-top: 8px;
+    border-top: 1px solid #eee;
 }
-.video_list_item{
+
+.video_list_item {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    border: 1px solid black;
-    margin-top: -1px;
-    padding: 3px;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    margin-top: 4px;
+    padding: 6px 8px;
     cursor: pointer;
+    background-color: #f9f9f9;
+    transition: background-color 0.2s;
 }
-#video_elements_list .selected_video_list, #video_elements_list .hover_video_list{
-    border: 2px solid red;
+
+.video_list_item:hover {
+    background-color: #eee;
 }
-#close_button{
+
+#video_elements_list .selected_video_list {
+    background-color: #e8f5e9;
+    border: 1px solid #4CAF50;
+    color: #2e7d32;
+}
+
+#video_elements_list .hover_video_list {
+    border: 1px solid #2196F3;
+}
+
+#close_button {
     position: absolute;
-    top: 12px;
-    right: 15px;
+    top: 16px;
+    right: 16px;
+    background: transparent;
+    border: none;
+    padding: 4px;
+    color: #999;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s;
+    width: auto;
+    height: auto;
 }
-#no_videos{
-    border: 1px solid black;
-    padding: 5px;
+
+#close_button:hover {
+    color: #333;
+    background-color: #f0f0f0;
 }
-#upload_error_message{
-    color: red;
+
+#no_videos {
+    border: 1px dashed #ccc;
+    border-radius: 4px;
+    padding: 12px;
+    color: #666;
+    text-align: center;
+    background-color: #fafafa;
+}
+
+#upload_error_message {
+    color: #d32f2f;
+    margin-top: 4px;
+}
+
+fieldset {
+    border: 1px solid #eee;
+    border-radius: 6px;
+    padding: 8px 12px;
+    margin-top: 12px;
+}
+
+legend {
+    color: #555;
+    font-weight: 600;
+    padding: 0 4px;
 }
 `;
 shadow.appendChild(style);
@@ -1485,6 +1598,15 @@ function switch_fullscreen_video(){
     // Enable keyboard controls
     enableKeyboardControls();
     
+    // Add video click handler for play/pause toggle
+    window._videoClickHandler = function(e) {
+        // Prevent default behavior
+        e.preventDefault();
+        e.stopPropagation();
+        togglePlayPause();
+    };
+    the_video_element.addEventListener('click', window._videoClickHandler);
+    
     // Improved safety mechanism: only exit when truly detecting fullscreen failure
     // Extend timeout to 5 minutes, giving users enough time to use
     window._fullscreenTimeout = setTimeout(function() {
@@ -1500,11 +1622,147 @@ function switch_fullscreen_video(){
     }, 300000); // Extended to 5 minutes
 }
 
+// Helper function to create SVG icons
+function createSVGIcon(type) {
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("width", "24");
+    svg.setAttribute("height", "24");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("fill", "white");
+    svg.style.display = "block";
+    svg.style.pointerEvents = "none"; // Crucial: prevent SVG from intercepting clicks
+    
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    
+    switch(type) {
+        case 'play':
+            path.setAttribute("d", "M8 5v14l11-7z");
+            break;
+        case 'pause':
+            path.setAttribute("d", "M6 4h4v16H6V4zm8 0h4v16h-4V4z");
+            break;
+        case 'volume-high':
+            path.setAttribute("d", "M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z");
+            break;
+        case 'volume-low':
+            path.setAttribute("d", "M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z");
+            break;
+        case 'volume-muted':
+            path.setAttribute("d", "M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z");
+            break;
+        case 'settings':
+            path.setAttribute("d", "M19.14,12.94c0.04-0.3,0.06-0.61,0.06-0.94c0-0.32-0.02-0.64-0.07-0.94l2.03-1.58c0.18-0.14,0.23-0.41,0.12-0.61 l-1.92-3.32c-0.12-0.22-0.37-0.29-0.59-0.22l-2.39,0.96c-0.5-0.38-1.03-0.7-1.62-0.94L14.4,2.81c-0.04-0.24-0.24-0.41-0.48-0.41 h-3.84c-0.24,0-0.43,0.17-0.47,0.41L9.25,5.35C8.66,5.59,8.12,5.92,7.63,6.29L5.24,5.33c-0.22-0.08-0.47,0-0.59,0.22L2.74,8.87 C2.62,9.08,2.66,9.34,2.86,9.48l2.03,1.58C4.84,11.36,4.8,11.69,4.8,12s0.02,0.64,0.07,0.94l-2.03,1.58 c-0.18,0.14-0.23,0.41-0.12,0.61l1.92,3.32c0.12,0.22,0.37,0.29,0.59,0.22l2.39-0.96c0.5,0.38,1.03,0.7,1.62,0.94l0.36,2.54 c0.05,0.24,0.24,0.41,0.48,0.41h3.84c0.24,0,0.44-0.17,0.47-0.41l0.36-2.54c0.59-0.24,1.13-0.56,1.62-0.94l2.39,0.96 c0.22,0.08,0.47,0,0.59-0.22l1.92-3.32c0.12-0.22,0.07-0.47-0.12-0.61L19.14,12.94z M12,15.6c-1.98,0-3.6-1.62-3.6-3.6 s1.62-3.6,3.6-3.6s3.6,1.62,3.6,3.6S13.98,15.6,12,15.6z");
+            break;
+        case 'fullscreen-exit':
+            path.setAttribute("d", "M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z");
+            break;
+        case 'subtitle':
+            path.setAttribute("d", "M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zM4 12h4v2H4v-2zm10 6H4v-2h10v2zm6 0h-4v-2h4v2zm0-4H10v-2h10v2z");
+            break;
+        case 'forward':
+            path.setAttribute("d", "M4 18l8.5-6L4 6v12zm9-12v12l8.5-6L13 6z");
+            break;
+        case 'backward':
+            path.setAttribute("d", "M11 18V6l-8.5 6 8.5 6zm.5-6l8.5 6V6l-8.5 6z");
+            break;
+    }
+    
+    svg.appendChild(path);
+    return svg;
+}
+
+let osdTimeout;
+let seekAccumulator = 0;
+let seekResetTimeout;
+let lastSeekDirection = 0;
+
+function showOSD(text, iconType, position = 'top') {
+    const osd = document.getElementById("fullscreen_osd");
+    if (!osd) return;
+    
+    // Clear content
+    while (osd.firstChild) {
+        osd.removeChild(osd.firstChild);
+    }
+    
+    // Position logic
+    switch(position) {
+        case 'left':
+            osd.style.top = "50%";
+            osd.style.left = "10%";
+            osd.style.transform = "translate(-50%, -50%)";
+            break;
+        case 'right':
+            osd.style.top = "50%";
+            osd.style.left = "90%";
+            osd.style.transform = "translate(-50%, -50%)";
+            break;
+        case 'top':
+        default:
+            osd.style.top = "10%";
+            osd.style.left = "50%";
+            osd.style.transform = "translateX(-50%)"; 
+            break;
+    }
+    
+    // Add icon if provided
+    if (iconType) {
+        const icon = createSVGIcon(iconType);
+        // Override size for OSD if needed, but 24px is usually fine
+        icon.style.pointerEvents = "none";
+        osd.appendChild(icon);
+    }
+    
+    // Add text
+    const textSpan = document.createElement("span");
+    textSpan.textContent = text;
+    textSpan.style.lineHeight = "24px"; // Align with icon
+    osd.appendChild(textSpan);
+    
+    // Show
+    osd.style.opacity = "1";
+    
+    // Auto hide
+    clearTimeout(osdTimeout);
+    osdTimeout = setTimeout(() => {
+        osd.style.opacity = "0";
+        // Reset position after hide to avoid jumpiness on next show if position changes
+    }, 1500); // 1.5 seconds
+}
+
 // Create fullscreen control interface
 function createFullscreenControls() {
     // Check if control interface already exists
     if (document.getElementById("fullscreen_controls")) {
         return;
+    }
+    
+    // Create OSD element (Youtube style)
+    if (!document.getElementById("fullscreen_osd")) {
+        const osd = document.createElement("div");
+        osd.id = "fullscreen_osd";
+        osd.style.cssText = `
+            position: fixed;
+            top: 10%;
+            left: 50%;
+            transform: translateX(-50%);
+            background: transparent;
+            padding: 0;
+            color: white;
+            font-size: 24px;
+            font-weight: bold;
+            font-family: Arial, sans-serif;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.2s ease;
+            z-index: 1000001;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            text-shadow: 0 2px 8px rgba(0,0,0,0.8);
+            filter: drop-shadow(0 2px 8px rgba(0,0,0,0.8));
+        `;
+        document.body.appendChild(osd);
     }
     
     // Create control interface container
@@ -1515,149 +1773,528 @@ function createFullscreenControls() {
         bottom: 0;
         left: 0;
         width: 100%;
-        background-color: rgba(0, 0, 0, 0.5);
-        padding: 10px;
+        box-sizing: border-box; /* Crucial: prevent padding from increasing total width */
+        background: linear-gradient(to top, rgba(0, 0, 0, 0.8) 0%, rgba(0, 0, 0, 0.6) 70%, transparent 100%);
+        padding: 20px 30px 15px 30px;
         z-index: 999999;
         color: white;
         font-family: Arial, sans-serif;
-        transition: opacity 0.3s;
+        transition: opacity 0.3s ease, transform 0.3s ease;
         opacity: 0;
+        transform: translateY(20px);
     `;
     
-    // Create control interface content
-    // Use DOM methods instead of innerHTML
-    // Create time info area
-    const timeInfoDiv = document.createElement("div");
-    timeInfoDiv.id = "controls_time_info";
-    timeInfoDiv.style.marginRight = "15px";
-    timeInfoDiv.textContent = "00:00 / 00:00";
+    // Create main controls row
+    const controlsRow = document.createElement("div");
+    controlsRow.style.cssText = `
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 12px;
+    `;
     
-    // Create play/pause button
-    const playPauseDiv = document.createElement("div");
-    playPauseDiv.id = "controls_playpause";
-    playPauseDiv.style.cursor = "pointer";
-    playPauseDiv.style.margin = "0 10px";
-    playPauseDiv.textContent = "⏸️";
+    // LEFT SECTION: Play controls and time
+    const leftSection = document.createElement("div");
+    leftSection.style.cssText = `
+        display: flex;
+        align-items: center;
+        gap: 15px;
+    `;
     
-    // Create volume down button
-    const volumeDownDiv = document.createElement("div");
-    volumeDownDiv.id = "controls_volume_down";
-    volumeDownDiv.style.cursor = "pointer";
-    volumeDownDiv.style.margin = "0 5px";
-    volumeDownDiv.textContent = "🔉";
+    // Play/Pause button
+    const playPauseBtn = document.createElement("button");
+    playPauseBtn.id = "controls_playpause";
+    playPauseBtn.className = "control-btn";
+    playPauseBtn.style.cssText = `
+        background: transparent;
+        border: none;
+        cursor: pointer;
+        padding: 5px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: transform 0.2s ease, opacity 0.2s ease;
+    `;
+    playPauseBtn.appendChild(createSVGIcon('pause'));
     
-    // Create volume up button
-    const volumeUpDiv = document.createElement("div");
-    volumeUpDiv.id = "controls_volume_up";
-    volumeUpDiv.style.cursor = "pointer";
-    volumeUpDiv.style.margin = "0 5px";
-    volumeUpDiv.textContent = "🔊";
+    // Volume Control Wrapper
+    const volumeWrapper = document.createElement("div");
+    volumeWrapper.id = "volume_wrapper";
+    volumeWrapper.style.cssText = `
+        position: relative;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin: 0 5px;
+    `;
     
-    // Create backward button
-    const backwardDiv = document.createElement("div");
-    backwardDiv.id = "controls_backward";
-    backwardDiv.style.cursor = "pointer";
-    backwardDiv.style.margin = "0 5px";
-    backwardDiv.textContent = "⏪";
+    // Mute Button (Click to mute/unmute)
+    const muteBtn = document.createElement("button");
+    muteBtn.id = "controls_mute_btn";
+    muteBtn.className = "control-btn";
+    muteBtn.style.cssText = `
+        background: transparent;
+        border: none;
+        cursor: pointer;
+        padding: 5px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: transform 0.2s ease, opacity 0.2s ease;
+        position: relative;
+        z-index: 1000002; /* Ensure it's above the slider container */
+    `;
+    muteBtn.appendChild(createSVGIcon('volume-high'));
     
-    // Create forward button
-    const forwardDiv = document.createElement("div");
-    forwardDiv.id = "controls_forward";
-    forwardDiv.style.cursor = "pointer";
-    forwardDiv.style.margin = "0 5px";
-    forwardDiv.textContent = "⏩";
+    // Volume slider container
+    const volumeSliderContainer = document.createElement("div");
+    volumeSliderContainer.id = "volume_slider_container";
+    volumeSliderContainer.style.cssText = `
+        position: absolute;
+        bottom: 100%;
+        left: 50%;
+        transform: translateX(-50%);
+        background: rgba(0, 0, 0, 0.9);
+        padding: 15px 10px;
+        border-radius: 8px;
+        transition: opacity 0.2s ease, visibility 0.2s ease;
+        opacity: 0;
+        visibility: hidden;
+        display: flex;
+        justify-content: center;
+        margin-bottom: 5px;
+        z-index: 1000000; /* Ensure it's on top */
+        cursor: default; /* Prevent pointer events from passing through easily */
+        pointer-events: none; /* Crucial: prevent blocking clicks when hidden */
+    `;
     
-    // Create wrapper container
-    const flexContainer = document.createElement("div");
-    flexContainer.style.display = "flex";
-    flexContainer.style.justifyContent = "center";
-    flexContainer.style.alignItems = "center";
-    flexContainer.style.padding = "5px";
+    // Volume Slider
+    const volumeSlider = document.createElement("input");
+    volumeSlider.id = "volume_slider";
+    volumeSlider.type = "range";
+    volumeSlider.min = "0";
+    volumeSlider.max = "100";
+    volumeSlider.value = "100";
+    // Cross-browser vertical slider styles
+    volumeSlider.style.cssText = `
+        width: 6px;
+        height: 80px;
+        -webkit-appearance: slider-vertical; /* WebKit */
+        appearance: slider-vertical;
+        cursor: pointer;
+        background: transparent; 
+        z-index: 1000001;
+    `;
+    // For Firefox specifically (as it might not support appearance: slider-vertical well in all contexts or versions)
+    // We can add 'orient="vertical"' attribute
+    volumeSlider.setAttribute("orient", "vertical");
     
-    // Add all control elements
-    flexContainer.appendChild(timeInfoDiv);
-    flexContainer.appendChild(playPauseDiv);
-    flexContainer.appendChild(volumeDownDiv);
-    flexContainer.appendChild(volumeUpDiv);
-    flexContainer.appendChild(backwardDiv);
-    flexContainer.appendChild(forwardDiv);
+    volumeSliderContainer.appendChild(volumeSlider);
+    volumeWrapper.appendChild(muteBtn);
+    volumeWrapper.appendChild(volumeSliderContainer);
     
-    // Add container to control interface
-    controls.appendChild(flexContainer);
+    // Hover behavior for volume wrapper
+    volumeWrapper.addEventListener('mouseenter', function() {
+        volumeSliderContainer.style.opacity = '1';
+        volumeSliderContainer.style.visibility = 'visible';
+        volumeSliderContainer.style.pointerEvents = 'auto';
+    });
     
-    // Add progress bar container
+    volumeWrapper.addEventListener('mouseleave', function() {
+        volumeSliderContainer.style.opacity = '0';
+        volumeSliderContainer.style.visibility = 'hidden';
+        volumeSliderContainer.style.pointerEvents = 'none';
+    });
+
+    // Time display
+    const timeDisplay = document.createElement("div");
+    timeDisplay.id = "controls_time_info";
+    timeDisplay.style.cssText = `
+        font-size: 14px;
+        font-weight: 500;
+        color: white;
+        min-width: 120px;
+        user-select: none;
+    `;
+    timeDisplay.textContent = "00:00 / 00:00";
+    
+    // Skip buttons
+    const backwardBtn = document.createElement("button");
+    backwardBtn.id = "controls_backward";
+    backwardBtn.className = "control-btn";
+    backwardBtn.style.cssText = playPauseBtn.style.cssText;
+    backwardBtn.appendChild(createSVGIcon('backward'));
+    
+    const forwardBtn = document.createElement("button");
+    forwardBtn.id = "controls_forward";
+    forwardBtn.className = "control-btn";
+    forwardBtn.style.cssText = playPauseBtn.style.cssText;
+    forwardBtn.appendChild(createSVGIcon('forward'));
+    
+    leftSection.appendChild(playPauseBtn);
+    leftSection.appendChild(volumeWrapper);
+    leftSection.appendChild(timeDisplay);
+    leftSection.appendChild(backwardBtn);
+    leftSection.appendChild(forwardBtn);
+    
+    // RIGHT SECTION: Settings and fullscreen
+    const rightSection = document.createElement("div");
+    rightSection.style.cssText = `
+        display: flex;
+        align-items: center;
+        gap: 20px;
+    `;
+    
+    // Settings button
+    const settingsBtn = document.createElement("button");
+    settingsBtn.id = "controls_settings";
+    settingsBtn.className = "control-btn";
+    settingsBtn.style.cssText = playPauseBtn.style.cssText + "min-width: 34px; min-height: 34px;";
+    settingsBtn.title = "Settings";
+    settingsBtn.appendChild(createSVGIcon('settings'));
+    
+    // Exit fullscreen button (Manual creation)
+    const exitFullscreenBtn = document.createElement("button");
+    exitFullscreenBtn.id = "controls_exit_fullscreen";
+    exitFullscreenBtn.className = "control-btn";
+    exitFullscreenBtn.style.cssText = playPauseBtn.style.cssText + "min-width: 34px; min-height: 34px;";
+    exitFullscreenBtn.title = "Exit Fullscreen";
+    
+    // Use standard Exit Fullscreen icon
+    const exitSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    exitSvg.setAttribute("width", "24");
+    exitSvg.setAttribute("height", "24");
+    exitSvg.setAttribute("viewBox", "0 0 24 24");
+    exitSvg.setAttribute("fill", "white");
+    exitSvg.style.display = "block";
+    exitSvg.style.pointerEvents = "none";
+    
+    const exitPath = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    exitPath.setAttribute("d", "M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z");
+    
+    exitSvg.appendChild(exitPath);
+    exitFullscreenBtn.appendChild(exitSvg);
+    
+    // Standard Order: Settings -> Exit Fullscreen
+    rightSection.appendChild(settingsBtn);
+    rightSection.appendChild(exitFullscreenBtn);
+    
+    // Assemble controls row
+    controlsRow.appendChild(leftSection);
+    controlsRow.appendChild(rightSection);
+    
+    // PROGRESS BAR SECTION
+    const progressSection = document.createElement("div");
+    progressSection.style.cssText = `
+        position: relative;
+        width: 100%;
+        height: 20px;
+        display: flex;
+        align-items: center;
+        cursor: pointer;
+    `;
+    
     const progressContainer = document.createElement("div");
-    progressContainer.style.marginTop = "5px";
-    progressContainer.style.position = "relative";
-    progressContainer.style.height = "5px";
-    progressContainer.style.backgroundColor = "rgba(255, 255, 255, 0.3)";
+    progressContainer.id = "progress_container";
+    progressContainer.style.cssText = `
+        position: relative;
+        width: 100%;
+        height: 5px;
+        background-color: rgba(255, 255, 255, 0.3);
+        border-radius: 3px;
+        overflow: visible;
+        transition: height 0.2s ease;
+    `;
     
-    // Add progress bar
+    // Buffer bar (Added feature)
+    const bufferBar = document.createElement("div");
+    bufferBar.id = "controls_buffer";
+    bufferBar.style.cssText = `
+        position: absolute;
+        left: 0;
+        top: 0;
+        height: 100%;
+        background-color: rgba(255, 255, 255, 0.4);
+        border-radius: 3px;
+        width: 0%;
+        transition: width 0.2s linear;
+        z-index: 1;
+    `;
+    
     const progressBar = document.createElement("div");
     progressBar.id = "controls_progress";
-    progressBar.style.position = "absolute";
-    progressBar.style.height = "100%";
-    progressBar.style.backgroundColor = "rgba(255, 255, 255, 0.8)";
-    progressBar.style.width = "0%";
+    progressBar.style.cssText = `
+        position: absolute;
+        left: 0;
+        top: 0;
+        height: 100%;
+        background-color: #4FC3F7;
+        border-radius: 3px;
+        width: 0%;
+        transition: width 0.1s linear;
+        z-index: 2; /* Ensure it's above buffer bar */
+    `;
     
+    const progressHoverDot = document.createElement("div");
+    progressHoverDot.id = "progress_hover_dot";
+    progressHoverDot.style.cssText = `
+        position: absolute;
+        top: 50%;
+        transform: translate(-50%, -50%);
+        width: 14px;
+        height: 14px;
+        background-color: #4FC3F7;
+        border-radius: 50%;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.2s ease;
+        box-shadow: 0 0 8px rgba(79, 195, 247, 0.6);
+        z-index: 3; /* Ensure dot is on top */
+    `;
+    
+    const timeTooltip = document.createElement("div");
+    timeTooltip.id = "time_tooltip";
+    timeTooltip.style.cssText = `
+        position: absolute;
+        bottom: 25px;
+        transform: translateX(-50%);
+        background-color: rgba(0, 0, 0, 0.9);
+        color: white;
+        padding: 4px 8px;
+        border-radius: 4px;
+        font-size: 12px;
+        font-weight: 500;
+        white-space: nowrap;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.2s ease;
+        z-index: 10;
+    `;
+    timeTooltip.textContent = "00:00";
+    
+    progressContainer.appendChild(bufferBar);
     progressContainer.appendChild(progressBar);
-    controls.appendChild(progressContainer);
+    progressContainer.appendChild(progressHoverDot);
+    progressContainer.appendChild(timeTooltip);
+    progressSection.appendChild(progressContainer);
     
-    // Add keyboard hints
-    const keyboardHints = document.createElement("div");
-    keyboardHints.style.textAlign = "center";
-    keyboardHints.style.marginTop = "8px";
-    keyboardHints.style.fontSize = "12px";
-    keyboardHints.textContent = "Keyboard controls: Space=Play/Pause, ←→=Rewind/Fast forward, ↑↓=Volume+/-, Esc=Exit fullscreen";
-    
-    controls.appendChild(keyboardHints);
+    // Assemble all sections
+    controls.appendChild(progressSection);
+    controls.appendChild(controlsRow);
     
     // Add to page
     document.body.appendChild(controls);
     
+    // Store event handlers for cleanup
+    window._fullscreenEventHandlers = {};
+    
     // Add control events
-    document.getElementById("controls_playpause").addEventListener("click", function() {
+    playPauseBtn.addEventListener("click", function(e) {
+        e.stopPropagation();
         togglePlayPause();
     });
     
-    document.getElementById("controls_volume_down").addEventListener("click", function() {
-        adjustVolume(-0.1);
-    });
-    
-    document.getElementById("controls_volume_up").addEventListener("click", function() {
-        adjustVolume(0.1);
-    });
-    
-    document.getElementById("controls_backward").addEventListener("click", function() {
+    backwardBtn.addEventListener("click", function(e) {
+        e.stopPropagation();
         skipTime(-10);
     });
     
-    document.getElementById("controls_forward").addEventListener("click", function() {
+    forwardBtn.addEventListener("click", function(e) {
+        e.stopPropagation();
         skipTime(10);
     });
     
+    // Mute/Unmute control
+    muteBtn.addEventListener("click", function(e) {
+        e.stopPropagation();
+        if (!the_video_element) return;
+        
+        if (the_video_element.muted) {
+            // Unmute
+            the_video_element.muted = false;
+            // If volume was 0, restore to default or last known good volume
+            if (the_video_element.volume === 0) {
+                the_video_element.volume = 0.5; // Default to 50% if it was 0
+            } else if (the_video_element._lastVolume && the_video_element._lastVolume > 0) {
+                the_video_element.volume = the_video_element._lastVolume;
+            }
+        } else {
+            // Mute
+            the_video_element._lastVolume = the_video_element.volume; // Save current volume
+            the_video_element.muted = true;
+        }
+        updateVolumeIcon();
+    });
+    
+    const updateVolumeFromSlider = function(e) {
+        e.stopPropagation();
+        if (the_video_element) {
+            const newVolume = this.value / 100;
+            the_video_element.volume = newVolume;
+            
+            // If sliding volume, ensure it's not muted
+            if (newVolume > 0 && the_video_element.muted) {
+                the_video_element.muted = false;
+            }
+            
+            // If dragged to 0, mute it
+            if (newVolume === 0) {
+                the_video_element.muted = true;
+            }
+            
+            updateVolumeIcon();
+        }
+    };
+
+    volumeSlider.addEventListener("input", updateVolumeFromSlider);
+    volumeSlider.addEventListener("change", updateVolumeFromSlider);
+    
+    // Settings button (open menu)
+    settingsBtn.addEventListener("click", function(e) {
+        e.stopPropagation();
+        const menu = shadow_root.getElementById("addsubtitle_menu");
+        if (menu) {
+            menu.style.display = "inline-block";
+        }
+    });
+    
+    // Exit fullscreen
+    exitFullscreenBtn.addEventListener("click", function(e) {
+        e.stopPropagation();
+        if (document.fullscreenElement) {
+            document.exitFullscreen();
+        }
+    });
+    
+    // Progress bar interaction
+    window._fullscreenEventHandlers.progressClick = function(e) {
+        if (!the_video_element) return;
+        const rect = progressContainer.getBoundingClientRect();
+        const offsetX = e.clientX - rect.left;
+        const percentage = Math.max(0, Math.min(1, offsetX / rect.width));
+        the_video_element.currentTime = percentage * the_video_element.duration;
+        updateControlsUI();
+    };
+    
+    window._fullscreenEventHandlers.progressMouseMove = function(e) {
+        if (!the_video_element) return;
+        const rect = progressContainer.getBoundingClientRect();
+        const offsetX = e.clientX - rect.left;
+        const percentage = Math.max(0, Math.min(1, offsetX / rect.width));
+        const time = percentage * the_video_element.duration;
+        
+        // Update tooltip
+        timeTooltip.textContent = formatTime(time);
+        timeTooltip.style.left = offsetX + "px";
+        timeTooltip.style.opacity = "1";
+        
+        // Update hover dot
+        progressHoverDot.style.left = (percentage * 100) + "%";
+        progressHoverDot.style.opacity = "1";
+        
+        // Expand progress bar on hover
+        progressContainer.style.height = "8px";
+    };
+    
+    window._fullscreenEventHandlers.progressMouseEnter = function() {
+        progressContainer.style.height = "8px";
+    };
+    
+    window._fullscreenEventHandlers.progressMouseLeave = function() {
+        timeTooltip.style.opacity = "0";
+        progressHoverDot.style.opacity = "0";
+        progressContainer.style.height = "5px";
+    };
+    
+    progressContainer.addEventListener("click", window._fullscreenEventHandlers.progressClick);
+    progressContainer.addEventListener("mousemove", window._fullscreenEventHandlers.progressMouseMove);
+    progressContainer.addEventListener("mouseenter", window._fullscreenEventHandlers.progressMouseEnter);
+    progressContainer.addEventListener("mouseleave", window._fullscreenEventHandlers.progressMouseLeave);
+    
     // Auto hide/show control interface
-    var timeout;
-    document.addEventListener("mousemove", function() {
+    var hideTimeout;
+    window._fullscreenEventHandlers.controlsMouseMove = function() {
         var controls = document.getElementById("fullscreen_controls");
         if (controls && video_fullscreen) {
             controls.style.opacity = "1";
-            clearTimeout(timeout);
-            timeout = setTimeout(function() {
-                controls.style.opacity = "0";
+            controls.style.transform = "translateY(0)";
+            clearTimeout(hideTimeout);
+            hideTimeout = setTimeout(function() {
+                // Check if mouse is hovering volume wrapper
+                const volumeWrapper = document.getElementById("volume_wrapper");
+                const isHoveringVolume = volumeWrapper && volumeWrapper.matches(':hover');
+                
+                if (!isHoveringVolume) {
+                    controls.style.opacity = "0";
+                    controls.style.transform = "translateY(20px)";
+                }
             }, 3000);
         }
+    };
+    
+    window._fullscreenEventHandlers.controlsMouseEnter = function() {
+        clearTimeout(hideTimeout);
+    };
+    
+    document.addEventListener("mousemove", window._fullscreenEventHandlers.controlsMouseMove);
+    controls.addEventListener("mouseenter", window._fullscreenEventHandlers.controlsMouseEnter);
+    
+    // Button hover effects
+    const controlButtons = controls.querySelectorAll('.control-btn');
+    controlButtons.forEach(btn => {
+        btn.addEventListener('mouseenter', function() {
+            this.style.transform = 'scale(1.15)';
+            this.style.opacity = '1';
+        });
+        btn.addEventListener('mouseleave', function() {
+            this.style.transform = 'scale(1)';
+            this.style.opacity = '0.9';
+        });
     });
     
     // Initial update of control bar
     updateControlsUI();
     
     // Periodically update control bar
-    setInterval(function() {
+    window._fullscreenUpdateInterval = setInterval(function() {
         if (video_fullscreen && the_video_element) {
             updateControlsUI();
         }
-    }, 1000);
+    }, 100);
+}
+
+// Update volume icon based on current volume
+function updateVolumeIcon() {
+    if (!the_video_element) return;
+    
+    const muteBtn = document.getElementById("controls_mute_btn");
+    if (!muteBtn) return;
+    
+    // Remove old icon
+    const oldIcon = muteBtn.querySelector('svg');
+    if (oldIcon) oldIcon.remove();
+    
+    // Add new icon based on volume level
+    const volume = the_video_element.volume;
+    let iconType = 'volume-high';
+    
+    if (volume === 0 || the_video_element.muted) {
+        iconType = 'volume-muted';
+    } else if (volume < 0.5) {
+        iconType = 'volume-low';
+    }
+    
+    muteBtn.appendChild(createSVGIcon(iconType));
+    
+    // Sync slider value
+    const volumeSlider = document.getElementById("volume_slider");
+    if (volumeSlider) {
+        if (the_video_element.muted) {
+            volumeSlider.value = 0;
+        } else {
+            volumeSlider.value = volume * 100;
+        }
+    }
 }
 
 // Update control interface UI
@@ -1666,6 +2303,7 @@ function updateControlsUI() {
     
     var timeInfo = document.getElementById("controls_time_info");
     var progress = document.getElementById("controls_progress");
+    var bufferBar = document.getElementById("controls_buffer");
     var playPauseBtn = document.getElementById("controls_playpause");
     
     if (timeInfo && progress && playPauseBtn) {
@@ -1678,21 +2316,62 @@ function updateControlsUI() {
         var progressPercent = (the_video_element.currentTime / the_video_element.duration) * 100;
         progress.style.width = progressPercent + "%";
         
-        // Update play/pause button
-        playPauseBtn.textContent = the_video_element.paused ? "▶️" : "⏸️";
+        // Update buffer bar
+        if (bufferBar && the_video_element.buffered.length > 0) {
+            var bufferedEnd = 0;
+            // Find the buffered range that covers the current time
+            for (var i = 0; i < the_video_element.buffered.length; i++) {
+                if (the_video_element.buffered.start(i) <= the_video_element.currentTime && 
+                    the_video_element.buffered.end(i) >= the_video_element.currentTime) {
+                    bufferedEnd = the_video_element.buffered.end(i);
+                    break;
+                }
+            }
+            // If current time is not in any buffer range (e.g. seeking), use the last buffer range or keep 0
+            if (bufferedEnd === 0 && the_video_element.buffered.length > 0) {
+                 // Optional: show the furthest buffered point
+                 // bufferedEnd = the_video_element.buffered.end(the_video_element.buffered.length - 1);
+            }
+            
+            var bufferPercent = (bufferedEnd / the_video_element.duration) * 100;
+            bufferBar.style.width = bufferPercent + "%";
+        }
+        
+        // Update play/pause button icon
+        const oldIcon = playPauseBtn.querySelector('svg');
+        if (oldIcon) oldIcon.remove();
+        playPauseBtn.appendChild(createSVGIcon(the_video_element.paused ? 'play' : 'pause'));
+        
+        // Update volume slider
+        const volumeSlider = document.getElementById("volume_slider");
+        if (volumeSlider) {
+            if (the_video_element.muted) {
+                volumeSlider.value = 0;
+            } else {
+                volumeSlider.value = the_video_element.volume * 100;
+            }
+        }
+        updateVolumeIcon();
     }
 }
 
-// Format time (seconds -> MM:SS)
+// Format time (seconds -> HH:MM:SS or MM:SS)
 function formatTime(seconds) {
     if (isNaN(seconds)) return "00:00";
     
     seconds = Math.floor(seconds);
-    var minutes = Math.floor(seconds / 60);
+    var hours = Math.floor(seconds / 3600);
+    var minutes = Math.floor((seconds % 3600) / 60);
     var remainingSeconds = seconds % 60;
     
-    return (minutes < 10 ? "0" : "") + minutes + ":" + 
-           (remainingSeconds < 10 ? "0" : "") + remainingSeconds;
+    if (hours > 0) {
+        return (hours < 10 ? "0" : "") + hours + ":" +
+               (minutes < 10 ? "0" : "") + minutes + ":" + 
+               (remainingSeconds < 10 ? "0" : "") + remainingSeconds;
+    } else {
+        return (minutes < 10 ? "0" : "") + minutes + ":" + 
+               (remainingSeconds < 10 ? "0" : "") + remainingSeconds;
+    }
 }
 
 // Play/pause toggle
@@ -1714,16 +2393,62 @@ function adjustVolume(delta) {
     
     var newVolume = Math.max(0, Math.min(1, the_video_element.volume + delta));
     the_video_element.volume = newVolume;
+    
+    // Ensure muted is false if we increase volume
+    if (delta > 0 && the_video_element.muted) {
+        the_video_element.muted = false;
+    }
+    // If volume becomes 0, mute it
+    if (newVolume === 0) {
+        the_video_element.muted = true;
+    }
+    
+    updateVolumeIcon();
+    
+    // Show OSD in fullscreen
+    if (video_fullscreen) {
+        const percent = Math.round(newVolume * 100) + "%";
+        let icon = 'volume-high';
+        if (newVolume === 0) icon = 'volume-muted';
+        else if (newVolume < 0.5) icon = 'volume-low';
+        showOSD(percent, icon);
+    }
 }
 
 // Fast forward/rewind
 function skipTime(seconds) {
     if (!the_video_element) return;
     
+    // Accumulate seek time logic
+    const direction = seconds > 0 ? 1 : -1;
+    
+    // If direction changed, reset accumulator
+    if (direction !== lastSeekDirection) {
+        seekAccumulator = 0;
+        lastSeekDirection = direction;
+    }
+    
+    seekAccumulator += seconds;
+    
+    // Reset accumulator after inactivity
+    clearTimeout(seekResetTimeout);
+    seekResetTimeout = setTimeout(() => {
+        seekAccumulator = 0;
+        lastSeekDirection = 0;
+    }, 1500); // Match OSD timeout
+    
     the_video_element.currentTime = Math.max(0, 
         Math.min(the_video_element.duration, the_video_element.currentTime + seconds));
     
     updateControlsUI();
+    
+    // Show OSD in fullscreen
+    if (video_fullscreen) {
+        const text = (seekAccumulator > 0 ? "+" : "") + seekAccumulator + "s";
+        const icon = seekAccumulator > 0 ? 'forward' : 'backward';
+        const position = seekAccumulator > 0 ? 'right' : 'left';
+        showOSD(text, icon, position);
+    }
 }
 
 // Enable keyboard controls
@@ -1800,6 +2525,12 @@ function restoreVideoState() {
         controls.remove();
     }
     
+    // Remove OSD
+    var osd = document.getElementById("fullscreen_osd");
+    if (osd) {
+        osd.remove();
+    }
+    
     // Reset error message (if exists)
     var errorMessage = document.getElementById("fullscreen_error_message");
     if (errorMessage) {
@@ -1808,6 +2539,49 @@ function restoreVideoState() {
     
     // Disable keyboard controls
     disableKeyboardControls();
+    
+    // Remove video click handler
+    if (the_video_element && window._videoClickHandler) {
+        the_video_element.removeEventListener('click', window._videoClickHandler);
+        window._videoClickHandler = null;
+    }
+    
+    // Clean up fullscreen control event handlers
+    if (window._fullscreenEventHandlers) {
+        const progressContainer = document.getElementById("progress_container");
+        const controls = document.getElementById("fullscreen_controls");
+        
+        if (progressContainer) {
+            if (window._fullscreenEventHandlers.progressClick) {
+                progressContainer.removeEventListener("click", window._fullscreenEventHandlers.progressClick);
+            }
+            if (window._fullscreenEventHandlers.progressMouseMove) {
+                progressContainer.removeEventListener("mousemove", window._fullscreenEventHandlers.progressMouseMove);
+            }
+            if (window._fullscreenEventHandlers.progressMouseEnter) {
+                progressContainer.removeEventListener("mouseenter", window._fullscreenEventHandlers.progressMouseEnter);
+            }
+            if (window._fullscreenEventHandlers.progressMouseLeave) {
+                progressContainer.removeEventListener("mouseleave", window._fullscreenEventHandlers.progressMouseLeave);
+            }
+        }
+        
+        if (window._fullscreenEventHandlers.controlsMouseMove) {
+            document.removeEventListener("mousemove", window._fullscreenEventHandlers.controlsMouseMove);
+        }
+        
+        if (controls && window._fullscreenEventHandlers.controlsMouseEnter) {
+            controls.removeEventListener("mouseenter", window._fullscreenEventHandlers.controlsMouseEnter);
+        }
+        
+        window._fullscreenEventHandlers = null;
+    }
+    
+    // Clear update interval
+    if (window._fullscreenUpdateInterval) {
+        clearInterval(window._fullscreenUpdateInterval);
+        window._fullscreenUpdateInterval = null;
+    }
     
     // Restore video element
     if (the_video_element) {
@@ -1882,12 +2656,24 @@ shadow_root.getElementById("refresh_video_list").addEventListener("click", funct
 });
 
 // Improved: Modern upload handling with error handling, retry mechanism and progress display
-shadow_root.getElementById("subtitle_upload_button").addEventListener("click", async function(){
-    const subtitle_file_input = shadow_root.getElementById("subtitle_file_input");
-    const subtitle_url_input = shadow_root.getElementById("subtitle_url_input");
-    const error_message_element = shadow_root.getElementById("upload_error_message");
-    const retry_button = shadow_root.getElementById("retry_button");
-    const progress_container = shadow_root.getElementById("upload_progress_container");
+shadow_root.getElementById("subtitle_upload_button").addEventListener("click", async function(event){
+    event.preventDefault();
+    event.stopPropagation();
+
+    // Re-acquire shadow root to be safe
+    const host = document.getElementById("shadow_host");
+    const root = host ? host.shadowRoot : shadow_root;
+
+    const subtitle_file_input = root.getElementById("subtitle_file_input");
+    const subtitle_url_input = root.getElementById("subtitle_url_input");
+    const error_message_element = root.getElementById("upload_error_message");
+    const retry_button = root.getElementById("retry_button");
+    const progress_container = root.getElementById("upload_progress_container");
+    
+    if (!error_message_element) {
+        console.error("Error message element not found");
+        return;
+    }
     
     // Reset error messages and retry button
     error_message_element.textContent = "";
@@ -1899,15 +2685,17 @@ shadow_root.getElementById("subtitle_upload_button").addEventListener("click", a
     try {
         let fileName = "";
         
-        if(subtitle_url_input.value.length > 0){
+        if(subtitle_url_input && subtitle_url_input.value.length > 0){
             await handleUrlUpload(subtitle_url_input.value, progressIndicator);
             fileName = subtitle_url_input.value.split('/').pop() || subtitle_url_input.value;
             subtitle_url_input.value = ""; // Clear URL input after success
-        } else {
+        } else if (subtitle_file_input && subtitle_file_input.files.length > 0) {
             const selectedFile = subtitle_file_input.files[0];
             await handleFileUpload(selectedFile, progressIndicator);
             fileName = selectedFile.name;
             // Don't clear file input - keep showing the loaded file name
+        } else {
+            throw new SubtitleError("Please select a file or enter a URL", "NO_INPUT");
         }
         
         progressIndicator.hide();
