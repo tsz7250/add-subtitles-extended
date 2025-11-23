@@ -58,7 +58,7 @@
 
 **重新產生步驟**：
 1. 從以下網址下載 zip 檔案：https://github.com/nk2028/opencc-js/releases/tag/v1.0.5
-5. 將 `src/cn2t.min.js` 複製到 `content_scripts/opencc-cn2t.js`
+2. 將 `src/cn2t.min.js` 複製到 `content_scripts/opencc-cn2t.js`
 
 ### 最後驗證
 
