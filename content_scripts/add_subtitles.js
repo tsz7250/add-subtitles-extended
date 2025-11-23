@@ -187,7 +187,32 @@ menu.id = "addsubtitle_menu";
 // Use DOM methods instead of innerHTML
 const closeButton = document.createElement("button");
 closeButton.id = "close_button";
-closeButton.textContent = "Close";
+// SVG Icon for close button
+const closeSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+closeSvg.setAttribute("width", "24");
+closeSvg.setAttribute("height", "24");
+closeSvg.setAttribute("viewBox", "0 0 24 24");
+closeSvg.setAttribute("fill", "none");
+closeSvg.setAttribute("stroke", "currentColor");
+closeSvg.setAttribute("stroke-width", "2");
+closeSvg.setAttribute("stroke-linecap", "round");
+closeSvg.setAttribute("stroke-linejoin", "round");
+
+const line1 = document.createElementNS("http://www.w3.org/2000/svg", "line");
+line1.setAttribute("x1", "18");
+line1.setAttribute("y1", "6");
+line1.setAttribute("x2", "6");
+line1.setAttribute("y2", "18");
+closeSvg.appendChild(line1);
+
+const line2 = document.createElementNS("http://www.w3.org/2000/svg", "line");
+line2.setAttribute("x1", "6");
+line2.setAttribute("y1", "6");
+line2.setAttribute("x2", "18");
+line2.setAttribute("y2", "18");
+closeSvg.appendChild(line2);
+
+closeButton.appendChild(closeSvg);
 menu.appendChild(closeButton);
 
 const line = document.createElement("div");
@@ -283,9 +308,13 @@ subtitle_file_fieldset.appendChild(progressContainer);
 
 menu.appendChild(subtitle_file_fieldset);
 
+// Create grid container for settings
+const settingsGrid = document.createElement("div");
+settingsGrid.id = "settings_grid";
+
 var subtitle_offset_line = document.createElement("div");
-subtitle_offset_line.className = "line";
-subtitle_offset_line.appendChild(document.createTextNode("Time offset: "));
+subtitle_offset_line.className = "line grid-item";
+subtitle_offset_line.appendChild(document.createTextNode("Time offset (s): "));
 
 var subtitle_offset_input = document.createElement("input");
 subtitle_offset_input.type = "number";
@@ -293,32 +322,29 @@ subtitle_offset_input.step = "0.01";
 subtitle_offset_input.id = "subtitle_offset_input";
 subtitle_offset_input.value = "0";
 subtitle_offset_line.appendChild(subtitle_offset_input);
-subtitle_offset_line.appendChild(document.createTextNode(" seconds"));
 
 var position_offset_line = document.createElement("div");
-position_offset_line.className = "line";
-position_offset_line.appendChild(document.createTextNode("Position offset: "));
+position_offset_line.className = "line grid-item";
+position_offset_line.appendChild(document.createTextNode("Position offset (px): "));
 
 var subtitle_offset_top_input = document.createElement("input");
 subtitle_offset_top_input.type = "number";
 subtitle_offset_top_input.id = "subtitle_offset_top_input";
 subtitle_offset_top_input.value = "-100";
 position_offset_line.appendChild(subtitle_offset_top_input);
-position_offset_line.appendChild(document.createTextNode(" px"));
 
 var subtitle_font_size_line = document.createElement("div");
-subtitle_font_size_line.className = "line";
-subtitle_font_size_line.appendChild(document.createTextNode("Font size: "));
+subtitle_font_size_line.className = "line grid-item";
+subtitle_font_size_line.appendChild(document.createTextNode("Font size (px): "));
 
 var subtitle_font_size_input = document.createElement("input");
 subtitle_font_size_input.type = "number";
 subtitle_font_size_input.id = "subtitle_font_size";
 subtitle_font_size_input.value = "26";
 subtitle_font_size_line.appendChild(subtitle_font_size_input);
-subtitle_font_size_line.appendChild(document.createTextNode(" px"));
 
 var subtitle_font_line = document.createElement("div");
-subtitle_font_line.className = "line";
+subtitle_font_line.className = "line grid-item";
 subtitle_font_line.appendChild(document.createTextNode("Font: "));
 
 var subtitle_font_input = document.createElement("input");
@@ -328,7 +354,7 @@ subtitle_font_input.value = "Arial";
 subtitle_font_line.appendChild(subtitle_font_input);
 
 var subtitle_font_color_line = document.createElement("div");
-subtitle_font_color_line.className = "line";
+subtitle_font_color_line.className = "line grid-item";
 subtitle_font_color_line.appendChild(document.createTextNode("Font color: "));
 
 var subtitle_font_color_input = document.createElement("input");
@@ -338,7 +364,7 @@ subtitle_font_color_input.value = "rgba(255, 255, 255, 1)";
 subtitle_font_color_line.appendChild(subtitle_font_color_input);
 
 var subtitle_background_color_line = document.createElement("div");
-subtitle_background_color_line.className = "line";
+subtitle_background_color_line.className = "line grid-item";
 subtitle_background_color_line.appendChild(document.createTextNode("Background color: "));
 
 var subtitle_background_color_input = document.createElement("input");
@@ -347,12 +373,14 @@ subtitle_background_color_input.id = "subtitle_background_color";
 subtitle_background_color_input.value = "rgba(0, 0, 0, 0.7)";
 subtitle_background_color_line.appendChild(subtitle_background_color_input);
 
-menu.appendChild(subtitle_offset_line);
-menu.appendChild(position_offset_line);
-menu.appendChild(subtitle_font_size_line);
-menu.appendChild(subtitle_font_line);
-menu.appendChild(subtitle_font_color_line);
-menu.appendChild(subtitle_background_color_line);
+settingsGrid.appendChild(subtitle_offset_line);
+settingsGrid.appendChild(position_offset_line);
+settingsGrid.appendChild(subtitle_font_size_line);
+settingsGrid.appendChild(subtitle_font_line);
+settingsGrid.appendChild(subtitle_font_color_line);
+settingsGrid.appendChild(subtitle_background_color_line);
+
+menu.appendChild(settingsGrid);
 
 // Add Simplified/Traditional Chinese conversion status display
 var converter_status_line = document.createElement("div");
@@ -380,7 +408,7 @@ shadow.appendChild(menu);
 var style = document.createElement("style");
 style.textContent = `
 #addsubtitle_menu *{
-    font-family: monospace;
+    font-family: system-ui, -apple-system, sans-serif;
     font-size: 12px;
     line-height: normal !important;
     box-sizing: border-box !important;
@@ -433,76 +461,161 @@ style.textContent = `
     0% { transform: translateX(-100%); }
     100% { transform: translateX(100%); }
 }
-button{
+
+button {
     cursor: pointer;
+    background-color: #f0f0f0;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    color: #333;
+    padding: 4px 8px;
+    transition: all 0.2s ease;
 }
-.line{
-    margin-top: 9px;
+
+button:hover {
+    background-color: #e0e0e0;
+    border-color: #bbb;
 }
-#addsubtitle_menu{
+
+button:active {
+    background-color: #d0d0d0;
+    transform: translateY(1px);
+}
+
+.line {
+    margin-top: 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+#addsubtitle_menu {
     z-index: 1000000;
     position: fixed;
     right: 14px;
     bottom: 14px;
-    width: 430px;
-    border: 1px solid black;
-    padding-left: 14px;
-    padding-right: 16px;
-    padding-top: 6px;
-    padding-bottom: 12px;
+    width: 580px;
+    border: none;
+    border-radius: 8px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+    padding: 16px;
     background-color: white;
-    color: black;
+    color: #333;
+    font-family: system-ui, -apple-system, sans-serif;
 }
-button{
-    background-color: white;
-    border: 1px solid black;
-    color: black;
-    padding: 2px;
+
+#settings_grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px 20px;
+    margin-top: 12px;
 }
-button:hover{
-    background-color: #f0f0f0;
+
+.grid-item {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-top: 0 !important;
+    align-items: flex-start !important;
 }
-button:active{
-    background-color: #ddd;
-}
-input[type="file"]{
+
+input[type="file"] {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
     width: 100%;
+    padding: 4px 0;
 }
-input:not([type="file"]){
-    border: 1px solid black;
-    height: 18px;
-    width: 200px;
+
+input:not([type="file"]) {
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    height: 30px;
+    width: 100%;
+    padding: 0 8px;
+    box-sizing: border-box !important;
 }
-#video_elements_list{
-    margin-top: 8px;
+
+#video_elements_list {
+    margin-top: 12px;
     padding-top: 8px;
+    border-top: 1px solid #eee;
 }
-.video_list_item{
+
+.video_list_item {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    border: 1px solid black;
-    margin-top: -1px;
-    padding: 3px;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    margin-top: 4px;
+    padding: 6px 8px;
     cursor: pointer;
+    background-color: #f9f9f9;
+    transition: background-color 0.2s;
 }
-#video_elements_list .selected_video_list, #video_elements_list .hover_video_list{
-    border: 2px solid red;
+
+.video_list_item:hover {
+    background-color: #eee;
 }
-#close_button{
+
+#video_elements_list .selected_video_list {
+    background-color: #e8f5e9;
+    border: 1px solid #4CAF50;
+    color: #2e7d32;
+}
+
+#video_elements_list .hover_video_list {
+    border: 1px solid #2196F3;
+}
+
+#close_button {
     position: absolute;
-    top: 12px;
-    right: 15px;
+    top: 16px;
+    right: 16px;
+    background: transparent;
+    border: none;
+    padding: 4px;
+    color: #999;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s;
+    width: auto;
+    height: auto;
 }
-#no_videos{
-    border: 1px solid black;
-    padding: 5px;
+
+#close_button:hover {
+    color: #333;
+    background-color: #f0f0f0;
 }
-#upload_error_message{
-    color: red;
+
+#no_videos {
+    border: 1px dashed #ccc;
+    border-radius: 4px;
+    padding: 12px;
+    color: #666;
+    text-align: center;
+    background-color: #fafafa;
+}
+
+#upload_error_message {
+    color: #d32f2f;
+    margin-top: 4px;
+}
+
+fieldset {
+    border: 1px solid #eee;
+    border-radius: 6px;
+    padding: 8px 12px;
+    margin-top: 12px;
+}
+
+legend {
+    color: #555;
+    font-weight: 600;
+    padding: 0 4px;
 }
 `;
 shadow.appendChild(style);
@@ -2543,12 +2656,24 @@ shadow_root.getElementById("refresh_video_list").addEventListener("click", funct
 });
 
 // Improved: Modern upload handling with error handling, retry mechanism and progress display
-shadow_root.getElementById("subtitle_upload_button").addEventListener("click", async function(){
-    const subtitle_file_input = shadow_root.getElementById("subtitle_file_input");
-    const subtitle_url_input = shadow_root.getElementById("subtitle_url_input");
-    const error_message_element = shadow_root.getElementById("upload_error_message");
-    const retry_button = shadow_root.getElementById("retry_button");
-    const progress_container = shadow_root.getElementById("upload_progress_container");
+shadow_root.getElementById("subtitle_upload_button").addEventListener("click", async function(event){
+    event.preventDefault();
+    event.stopPropagation();
+
+    // Re-acquire shadow root to be safe
+    const host = document.getElementById("shadow_host");
+    const root = host ? host.shadowRoot : shadow_root;
+
+    const subtitle_file_input = root.getElementById("subtitle_file_input");
+    const subtitle_url_input = root.getElementById("subtitle_url_input");
+    const error_message_element = root.getElementById("upload_error_message");
+    const retry_button = root.getElementById("retry_button");
+    const progress_container = root.getElementById("upload_progress_container");
+    
+    if (!error_message_element) {
+        console.error("Error message element not found");
+        return;
+    }
     
     // Reset error messages and retry button
     error_message_element.textContent = "";
@@ -2560,15 +2685,17 @@ shadow_root.getElementById("subtitle_upload_button").addEventListener("click", a
     try {
         let fileName = "";
         
-        if(subtitle_url_input.value.length > 0){
+        if(subtitle_url_input && subtitle_url_input.value.length > 0){
             await handleUrlUpload(subtitle_url_input.value, progressIndicator);
             fileName = subtitle_url_input.value.split('/').pop() || subtitle_url_input.value;
             subtitle_url_input.value = ""; // Clear URL input after success
-        } else {
+        } else if (subtitle_file_input && subtitle_file_input.files.length > 0) {
             const selectedFile = subtitle_file_input.files[0];
             await handleFileUpload(selectedFile, progressIndicator);
             fileName = selectedFile.name;
             // Don't clear file input - keep showing the loaded file name
+        } else {
+            throw new SubtitleError("Please select a file or enter a URL", "NO_INPUT");
         }
         
         progressIndicator.hide();

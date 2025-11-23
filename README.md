@@ -2,13 +2,16 @@
 
 一個簡單但功能強大的 Firefox 瀏覽器擴充套件，讓您可以為網頁上的任何 `<video>` 元素新增外部字幕檔案。
 
-<img src="./pic/demo.png" alt="示範" height=300>
+<img src="./pic/screen.png" alt="示範" height=300>
+<img src="./pic/panel.png" alt="設定面板" height=300>
+<img src="./pic/bar.png" alt="影片控制條" height=300>
 
 ## 專案說明
 本專案是基於原始 add-subtitles 進行修復及優化的版本。主要修改包括：
 - 新增支援 ASS/SSA 字幕格式
 - 自動簡體中文轉繁體中文
 - 修復全螢幕播放
+- 改善外觀
 
 ## 功能特色
 - 支援 SRT、VTT、ASS/SSA 字幕格式
