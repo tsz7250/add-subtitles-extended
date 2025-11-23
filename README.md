@@ -1,5 +1,7 @@
 # Add Subtitles Extension
 
+[繁體中文](README.zh-TW.md) | English
+
 A simple yet powerful Firefox browser extension that allows you to add external subtitle files to any `<video>` element on web pages.
 
 <img src="./pic/demo.png" alt="Demo" height=300>
