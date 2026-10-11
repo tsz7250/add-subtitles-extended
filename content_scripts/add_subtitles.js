@@ -652,8 +652,14 @@ function update_video_elements_list(){
         const lineBreak = document.createElement("br");
         noVideosDiv.appendChild(lineBreak);
         
-        const frameText = document.createTextNode("If your video is inside and iframe, press shift+right click on it then \"This Frame\" > \"Open Frame in New Tab\"");
-        noVideosDiv.appendChild(frameText);
+        const firefoxText = document.createTextNode("Firefox: press Shift + right-click on the video, then select \"This Frame\" > \"Open Frame in New Tab\".");
+        noVideosDiv.appendChild(firefoxText);
+
+        const browserLineBreak = document.createElement("br");
+        noVideosDiv.appendChild(browserLineBreak);
+
+        const chromeText = document.createTextNode("Chrome: right-click on the video, then select \"Open This Frame in New Tab\".");
+        noVideosDiv.appendChild(chromeText);
         
         video_elements_list.appendChild(noVideosDiv);
         return;
@@ -2955,8 +2961,14 @@ shadow_root.getElementById("reload_converter").addEventListener("click", functio
     const statusElement = shadow_root.getElementById("converter_status");
     statusElement.textContent = "Reloading...";
     statusElement.style.color = "orange";
-    if (typeof browser !== 'undefined' && browser.runtime) {
-        browser.runtime.sendMessage({ action: 'reinject_opencc' })
+    if (typeof chrome !== 'undefined' && chrome.runtime) {
+        new Promise((resolve, reject) => {
+            chrome.runtime.sendMessage({ action: 'reinject_opencc' }, response => {
+                const error = chrome.runtime.lastError;
+                if (error) reject(new Error(error.message));
+                else resolve(response);
+            });
+        })
             .then(() => setTimeout(updateConverterStatus, 1200))
             .catch(() => {
                 statusElement.textContent = "Reload Failed";

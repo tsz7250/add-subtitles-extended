@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <title>Add Subtitles</title>
+  <rect width="256" height="256" rx="56" fill="#14232d"/>
+  <rect x="27" y="43" width="202" height="170" rx="28" fill="#42d6c5"/>
+  <rect x="27" y="43" width="202" height="35" rx="28" fill="#2aa99f"/>
+  <rect x="27" y="60" width="202" height="18" fill="#2aa99f"/>
+  <circle cx="54" cy="61" r="7" fill="#ffb454"/>
+  <circle cx="78" cy="61" r="7" fill="#14232d"/>
+  <circle cx="102" cy="61" r="7" fill="#14232d"/>
+  <path d="m107 96 48 33-48 33Z" fill="#ffb454"/>
+  <rect x="52" y="177" width="88" height="12" rx="6" fill="#14232d"/>
+  <rect x="151" y="177" width="42" height="12" rx="6" fill="#14232d"/>
+</svg>

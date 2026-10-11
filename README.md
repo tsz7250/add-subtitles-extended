@@ -1,55 +1,71 @@
-# 新增字幕擴充套件
+# Add Subtitles Extended
 
-一個簡單但功能強大的 Firefox 瀏覽器擴充套件，讓您可以為網頁上的任何 `<video>` 元素新增外部字幕檔案。
+A simple yet powerful Firefox and Chrome browser extension that lets you add external subtitle files to any `<video>` element on a webpage.
 
-<img src="./pic/screen.png" alt="示範" height=300>
-<img src="./pic/panel.png" alt="設定面板" height=300>
-<img src="./pic/bar.png" alt="影片控制條" height=300>
+## Screenshots
 
-## 專案說明
-本專案是基於原始 add-subtitles 進行修復及優化的版本。主要修改包括：
-- 新增支援 ASS/SSA 字幕格式
-- 自動簡體中文轉繁體中文
-- 修復全螢幕播放
-- 改善外觀
+| Video Preview | Settings Panel |
+| :---: | :---: |
+| ![Video Preview](assets/screenshots/screen.png) | ![Settings Panel](assets/screenshots/panel.png) |
 
-## 功能特色
-- 支援 SRT、VTT、ASS/SSA 字幕格式
-- 支援 ZIP 壓縮檔中的字幕
-- 自動簡體中文轉繁體中文
-- 可調整字幕位置、大小和顏色
-- 支援全螢幕播放
-- 鍵盤快捷鍵控制
+| Video Controls |  |
+| :---: | :---: |
+| ![Video Controls](assets/screenshots/bar.png) |  |
 
-## 第三方函式庫聲明
+## Project Overview
+This project is a repaired and enhanced version based on the original add-subtitles extension. Major improvements include:
+- Added support for ASS/SSA subtitle formats
+- Automatic conversion from Simplified Chinese to Traditional Chinese
+- Fixed fullscreen playback
+- Improved appearance
 
-本擴充套件使用了以下第三方函式庫。完整資訊請參閱 [THIRD_PARTY_LIBRARIES.md](THIRD_PARTY_LIBRARIES.md)：
+## Features
+- Supports SRT, VTT, and ASS/SSA subtitle formats
+- Supports subtitles inside ZIP archives
+- Automatic conversion from Simplified Chinese to Traditional Chinese
+- Adjustable subtitle position, size, and color
+- Supports fullscreen playback
+- Keyboard shortcut controls
+
+## Third-Party Library Notices
+
+This extension uses the following third-party libraries. For complete information, please see [THIRD_PARTY_LIBRARIES.md](THIRD_PARTY_LIBRARIES.md):
 
 ### JSZip v3.3.0
-- **用途**：處理 ZIP 壓縮檔中的字幕檔案
-- **來源**：[官方 GitHub 儲存庫](https://github.com/Stuk/jszip)
-- **授權條款**：MIT License
-- **版本**：3.3.0（穩定版本）
+- **Purpose**: Process subtitle files inside ZIP archives
+- **Source**: [Official GitHub repository](https://github.com/Stuk/jszip)
+- **License**: MIT License
+- **Version**: 3.3.0 (stable version)
 
 ### OpenCC-JS v1.0.5
-- **用途**：簡體中文轉繁體中文
-- **來源**：[官方 GitHub 儲存庫](https://github.com/nk2028/opencc-js)
-- **授權條款**：MIT License
-- **版本**：1.0.5（穩定版本）
+- **Purpose**: Convert Simplified Chinese to Traditional Chinese
+- **Source**: [Official GitHub repository](https://github.com/nk2028/opencc-js)
+- **License**: MIT License
+- **Version**: 1.0.5 (stable version)
 
-## 安裝方式
+## Installation
 
-1. 從 Firefox 附加元件商店安裝（建議）
-2. 或下載 `.xpi` 檔案進行手動安裝
+1. Install it from the [Firefox Add-ons store](https://addons.mozilla.org/en-US/firefox/addon/add-subtitles-extended/) (recommended).
+2. Alternatively, download the `.xpi` file and install it manually.
+3. In Chrome, open `chrome://extensions`, enable **Developer mode**, select **Load unpacked**, and choose the project folder.
 
-## 使用方法
+## Usage
 
-1. 在包含 `<video>` 元素的網頁上點擊擴充套件圖示
-2. 選擇要新增字幕的影片元素
-3. 上傳字幕檔案或輸入字幕檔案的網址
-4. 調整字幕設定（選用）
-5. 享受帶有字幕的影片！
+1. Click the extension icon on a webpage containing a `<video>` element.
+2. Select the video element to which you want to add subtitles.
+3. Upload a subtitle file or enter the subtitle file URL.
+4. Adjust the subtitle settings (optional).
+5. Enjoy your video with subtitles!
 
-## 授權條款
+### Videos inside iframes
 
-本專案採用 MIT 授權條款。詳細資訊請參閱 [LICENSE](LICENSE) 檔案。
+If no video elements are found:
+
+- **Firefox**: Press `Shift` and right-click the video, then select **This Frame** > **Open Frame in New Tab**.
+- **Chrome**: Right-click the video, then select **Open This Frame in New Tab** from the extension's context menu.
+
+After opening the frame in a new tab, click the extension icon again to detect the video.
+
+## License
+
+This project is licensed under the MIT License. For details, please see the [LICENSE](LICENSE) file.

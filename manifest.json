@@ -1,27 +1,46 @@
 {
-    "manifest_version": 2,
+    "manifest_version": 3,
     "name": "Add Subtitles",
-    "version": "1.64",
+    "version": "1.65",
     "description": "Add subtitles to a video element.",
     "homepage_url": "https://github.com/tszngaiyip/add-subtitles-extended",
     "icons": {
-        "48": "icons/icon-48.png",
-        "96": "icons/icon-96.png"
+        "16": "assets/icons/icon-16.png",
+        "32": "assets/icons/icon-32.png",
+        "48": "assets/icons/icon-48.png",
+        "128": "assets/icons/icon-128.png"
     },
     "permissions": [
         "activeTab",
-        "<all_urls>"
+        "scripting",
+        "contextMenus"
     ],
+    "host_permissions": ["<all_urls>"],
     "background": {
-        "scripts": ["background_script.js"]
+        "scripts": ["background_script.js"],
+        "service_worker": "background_script.js"
     },
-    "web_accessible_resources": [
-        "content_scripts/jszip.min.js",
-        "content_scripts/opencc-cn2t.js",
-        "content_scripts/add_subtitles.js"
+    "content_scripts": [
+        {
+            "matches": ["<all_urls>"],
+            "all_frames": true,
+            "match_about_blank": true,
+            "run_at": "document_start",
+            "js": ["content_scripts/context_menu_guard.js"]
+        }
     ],
-    "browser_action": {
-        "default_icon": "icons/icon-32.png",
+    "web_accessible_resources": [
+        {
+            "resources": [
+                "content_scripts/jszip.min.js",
+                "content_scripts/opencc-cn2t.js",
+                "content_scripts/add_subtitles.js"
+            ],
+            "matches": ["<all_urls>"]
+        }
+    ],
+    "action": {
+        "default_icon": "assets/icons/icon-32.png",
         "default_title": "Add Subtitles"
     },
     "browser_specific_settings": {
