@@ -47,7 +47,9 @@ This extension uses the following third-party libraries. For complete informatio
 
 1. Install it from the [Firefox Add-ons store](https://addons.mozilla.org/en-US/firefox/addon/add-subtitles-extended/) (recommended).
 2. Alternatively, download the `.xpi` file and install it manually.
-3. In Chrome, open `chrome://extensions`, enable **Developer mode**, select **Load unpacked**, and choose the project folder.
+3. Run `npm install`, then run `npm run build` to create both browser packages.
+4. In Chrome, open `chrome://extensions`, enable **Developer mode**, select **Load unpacked**, and choose `dist/chrome`.
+5. In Firefox, open `about:debugging#/runtime/this-firefox`, select **Load Temporary Add-on**, and choose `dist/packages/add-subtitles-extended-firefox.zip`.
 
 ## Usage
 

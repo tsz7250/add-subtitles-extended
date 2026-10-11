@@ -1,0 +1,11 @@
+{
+  "name": "add-subtitles-extended",
+  "version": "1.65.0",
+  "private": true,
+  "description": "Build packages for the Add Subtitles browser extension.",
+  "scripts": {
+    "clean": "node -e \"require('fs').rmSync('dist', { recursive: true, force: true })\"",
+    "pack": "node scripts/pack.js",
+    "build": "node scripts/pack.js"
+  }
+}
