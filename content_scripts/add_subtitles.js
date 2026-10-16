@@ -401,6 +401,16 @@ reload_converter_button.textContent = "Reload Converter";
 reload_converter_button.style.marginLeft = "10px";
 converter_status_line.appendChild(reload_converter_button);
 
+// Add donate button
+var donate_button = document.createElement("button");
+donate_button.id = "donate_button";
+donate_button.textContent = "Donate";
+donate_button.style.marginLeft = "auto";
+donate_button.addEventListener("click", function() {
+    window.open("https://github.com/sponsors/tsz7250", "_blank");
+});
+converter_status_line.appendChild(donate_button);
+
 menu.appendChild(converter_status_line);
 
 shadow.appendChild(menu);

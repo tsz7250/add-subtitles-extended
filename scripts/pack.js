@@ -1,8 +1,8 @@
 const fs = require('fs');
 const path = require('path');
-const { execFileSync, execSync } = require('child_process');
 
 const rootDir = path.resolve(__dirname, '..');
+const JSZip = require(path.join(rootDir, 'content_scripts', 'jszip.min.js'));
 const distDir = path.join(rootDir, 'dist');
 const stagingDir = path.join(distDir, '.staging');
 const packagesDir = path.join(distDir, 'packages');
@@ -41,21 +41,31 @@ function writeManifest(browser, destinationDir) {
     );
 }
 
-function compressDirectory(sourceDir, archivePath) {
-    if (process.platform === 'win32') {
-        const escapedSource = sourceDir.replace(/'/g, "''");
-        const escapedArchive = archivePath.replace(/'/g, "''");
-        const command = `Compress-Archive -Path '${escapedSource}\\*' -DestinationPath '${escapedArchive}' -Force`;
-        execFileSync('powershell.exe', ['-NoProfile', '-Command', command], { stdio: 'inherit' });
-        return;
+function addDirectoryToZip(zip, dirPath, relativePath = '') {
+    const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+    for (const entry of entries) {
+        const fullPath = path.join(dirPath, entry.name);
+        const entryRelativePath = relativePath ? `${relativePath}/${entry.name}` : entry.name;
+        if (entry.isDirectory()) {
+            addDirectoryToZip(zip, fullPath, entryRelativePath);
+        } else {
+            zip.file(entryRelativePath, fs.readFileSync(fullPath));
+        }
     }
-
-    execSync(`cd ${JSON.stringify(sourceDir)} && zip -qr ${JSON.stringify(archivePath)} .`, {
-        stdio: 'inherit'
-    });
 }
 
-function buildPackage(browser) {
+async function compressDirectory(sourceDir, archivePath) {
+    const zip = new JSZip();
+    addDirectoryToZip(zip, sourceDir);
+    const content = await zip.generateAsync({
+        type: 'nodebuffer',
+        compression: 'DEFLATE',
+        compressionOptions: { level: 9 }
+    });
+    fs.writeFileSync(archivePath, content);
+}
+
+async function buildPackage(browser) {
     const outputDir = path.join(distDir, browser);
     const archivePath = path.join(packagesDir, `add-subtitles-extended-${browser}.zip`);
 
@@ -64,21 +74,25 @@ function buildPackage(browser) {
     commonFiles.forEach((entryName) => copyEntry(entryName, outputDir));
     writeManifest(browser, outputDir);
     removeIfExists(archivePath);
-    compressDirectory(outputDir, archivePath);
+    await compressDirectory(outputDir, archivePath);
 
     console.log(`Created ${archivePath}`);
 }
 
-try {
-    removeIfExists(distDir);
-    fs.mkdirSync(stagingDir, { recursive: true });
-    fs.mkdirSync(packagesDir, { recursive: true });
-    buildPackage('chrome');
-    buildPackage('firefox');
-    removeIfExists(stagingDir);
-    console.log('Build completed.');
-} catch (error) {
-    removeIfExists(stagingDir);
-    console.error(`Build failed: ${error.message}`);
-    process.exitCode = 1;
+async function main() {
+    try {
+        removeIfExists(distDir);
+        fs.mkdirSync(stagingDir, { recursive: true });
+        fs.mkdirSync(packagesDir, { recursive: true });
+        await buildPackage('chrome');
+        await buildPackage('firefox');
+        removeIfExists(stagingDir);
+        console.log('Build completed.');
+    } catch (error) {
+        removeIfExists(stagingDir);
+        console.error(`Build failed: ${error.message}`);
+        process.exitCode = 1;
+    }
 }
+
+main();
