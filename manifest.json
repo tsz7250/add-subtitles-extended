@@ -1,7 +1,7 @@
 {
     "manifest_version": 3,
     "name": "Add Subtitles",
-    "version": "1.65",
+    "version": "1.66",
     "description": "Add subtitles to a video element.",
     "homepage_url": "https://github.com/tszngaiyip/add-subtitles-extended",
     "icons": {

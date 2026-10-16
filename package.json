@@ -1,6 +1,6 @@
 {
   "name": "add-subtitles-extended",
-  "version": "1.65.0",
+  "version": "1.66.0",
   "private": true,
   "description": "Build packages for the Add Subtitles browser extension.",
   "scripts": {
