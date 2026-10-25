@@ -215,6 +215,72 @@ closeSvg.appendChild(line2);
 closeButton.appendChild(closeSvg);
 menu.appendChild(closeButton);
 
+// Fullscreen is a player-level action: icon button in the title bar, usable from any tab
+const make_video_fullscreen_button = document.createElement("button");
+make_video_fullscreen_button.id = "make_video_fullscreen";
+make_video_fullscreen_button.title = "Make video fullscreen";
+const maximizeSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+maximizeSvg.setAttribute("width", "24");
+maximizeSvg.setAttribute("height", "24");
+maximizeSvg.setAttribute("viewBox", "0 0 24 24");
+maximizeSvg.setAttribute("fill", "none");
+maximizeSvg.setAttribute("stroke", "currentColor");
+maximizeSvg.setAttribute("stroke-width", "2");
+maximizeSvg.setAttribute("stroke-linecap", "round");
+maximizeSvg.setAttribute("stroke-linejoin", "round");
+[
+    "M8 3H5a2 2 0 0 0-2 2v3",
+    "M21 8V5a2 2 0 0 0-2-2h-3",
+    "M3 16v3a2 2 0 0 0 2 2h3",
+    "M16 21h3a2 2 0 0 0 2-2v-3"
+].forEach(function(d){
+    const p = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    p.setAttribute("d", d);
+    maximizeSvg.appendChild(p);
+});
+make_video_fullscreen_button.appendChild(maximizeSvg);
+menu.appendChild(make_video_fullscreen_button);
+
+// Tab bar + pages
+const tab_pages = {};
+const tab_buttons = {};
+function activate_tab(name){
+    for (const key in tab_pages) {
+        tab_pages[key].style.display = key === name ? "block" : "none";
+        tab_buttons[key].classList.toggle("active", key === name);
+    }
+}
+const tab_bar = document.createElement("div");
+tab_bar.id = "tab_bar";
+menu.appendChild(tab_bar);
+[["main", "Main"], ["search", "Search"], ["settings", "Settings"]].forEach(function(pair){
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = pair[1];
+    btn.addEventListener("click", function(){ activate_tab(pair[0]); });
+    tab_buttons[pair[0]] = btn;
+    tab_bar.appendChild(btn);
+
+    const page = document.createElement("div");
+    page.className = "tab_page";
+    tab_pages[pair[0]] = page;
+    menu.appendChild(page);
+});
+activate_tab("main");
+
+const tab_page_main = tab_pages.main;
+const tab_page_search = tab_pages.search;
+const tab_page_settings = tab_pages.settings;
+
+// Keep Search/Settings pages as tall as the Main page so switching tabs does not resize the panel
+function sync_tab_heights(){
+    const h = tab_pages.main.offsetHeight;
+    if (h > 0) {
+        tab_pages.search.style.minHeight = h + "px";
+        tab_pages.settings.style.minHeight = h + "px";
+    }
+}
+
 const line = document.createElement("div");
 line.className = "line";
 
@@ -226,21 +292,11 @@ refreshButton.id = "refresh_video_list";
 refreshButton.textContent = "Refresh List";
 line.appendChild(refreshButton);
 
-menu.appendChild(line);
+tab_page_main.appendChild(line);
 
 const video_elements_list = document.createElement("div");
 video_elements_list.id = "video_elements_list";
-menu.appendChild(video_elements_list);
-
-const make_video_fullscreen = document.createElement("div");
-make_video_fullscreen.className = "line";
-
-const make_video_fullscreen_button = document.createElement("button");
-make_video_fullscreen_button.id = "make_video_fullscreen";
-make_video_fullscreen_button.textContent = "Make video fullscreen";
-make_video_fullscreen.appendChild(make_video_fullscreen_button);
-
-menu.appendChild(make_video_fullscreen);
+tab_page_main.appendChild(video_elements_list);
 
 const subtitle_file_fieldset = document.createElement("fieldset");
 
@@ -295,6 +351,14 @@ buttonLine.appendChild(retryButton);
 
 buttonLine.appendChild(document.createTextNode(" "));
 
+const goto_search_button = document.createElement("button");
+goto_search_button.id = "goto_search";
+goto_search_button.textContent = "Search online…";
+goto_search_button.addEventListener("click", function(){ activate_tab("search"); });
+buttonLine.appendChild(goto_search_button);
+
+buttonLine.appendChild(document.createTextNode(" "));
+
 const errorMessage = document.createElement("span");
 errorMessage.id = "upload_error_message";
 buttonLine.appendChild(errorMessage);
@@ -306,16 +370,11 @@ const progressContainer = document.createElement("div");
 progressContainer.id = "upload_progress_container";
 subtitle_file_fieldset.appendChild(progressContainer);
 
-menu.appendChild(subtitle_file_fieldset);
+tab_page_main.appendChild(subtitle_file_fieldset);
 
 // ======= Online subtitle search (OpenSubtitles / assrt / SubHD) =======
-const search_block = document.createElement("details");
+const search_block = document.createElement("div");
 search_block.id = "search_block";
-search_block.open = true;
-
-const search_summary = document.createElement("summary");
-search_summary.textContent = "Search subtitles online:";
-search_block.appendChild(search_summary);
 
 // Detected name hint (from page title chain, filled later)
 const search_hint = document.createElement("span");
@@ -365,23 +424,23 @@ search_provider_line.appendChild(document.createTextNode(" Language: "));
 
 const search_language = document.createElement("select");
 search_language.id = "search_language";
-[
-    ["all", "All"],
-    ["en", "English"],
-    ["zh", "Chinese"],
-    ["ja", "Japanese"],
-    ["ko", "Korean"],
-    ["es", "Spanish"],
-    ["fr", "French"],
-    ["de", "German"],
-    ["ru", "Russian"]
-].forEach(function(pair){
-    const opt = document.createElement("option");
-    opt.value = pair[0];
-    opt.textContent = pair[1];
-    search_language.appendChild(opt);
-});
-search_language.title = "OpenSubtitles: API-side filter. SubHD: filters the returned list client-side. Not applied on assrt.";
+// per-provider options: only languages each provider can actually filter
+const SEARCH_LANGS_ZH = [["all", "All"], ["en", "English"], ["zh-hans", "简体中文"], ["zh-hant", "繁體中文"]];
+const SEARCH_LANGS = {
+    opensubtitles: SEARCH_LANGS_ZH.concat([["ja", "Japanese"], ["ko", "Korean"], ["es", "Spanish"], ["fr", "French"], ["de", "German"], ["ru", "Russian"]]),
+    subhd: SEARCH_LANGS_ZH,
+    assrt: SEARCH_LANGS_ZH
+};
+function rebuild_search_language(){
+    search_language.textContent = "";
+    SEARCH_LANGS[search_provider.value].forEach(function(pair){
+        const opt = document.createElement("option");
+        opt.value = pair[0];
+        opt.textContent = pair[1];
+        search_language.appendChild(opt);
+    });
+}
+search_language.title = "OpenSubtitles: API-side filter. SubHD/assrt: filters the returned list client-side.";
 search_provider_line.appendChild(search_language);
 
 search_block.appendChild(search_provider_line);
@@ -401,14 +460,7 @@ const search_progress_container = document.createElement("div");
 search_progress_container.id = "search_progress_container";
 search_block.appendChild(search_progress_container);
 
-// Collapsible API key settings
-const online_keys = document.createElement("details");
-online_keys.id = "online_keys";
-
-const online_keys_summary = document.createElement("summary");
-online_keys_summary.textContent = "API keys";
-online_keys.appendChild(online_keys_summary);
-
+// API key settings (live in the Settings tab, no collapsible wrapper)
 const os_key_line = document.createElement("div");
 os_key_line.className = "line";
 os_key_line.appendChild(document.createTextNode("OpenSubtitles API key: "));
@@ -417,7 +469,7 @@ os_api_key_input.type = "password";
 os_api_key_input.id = "os_api_key";
 os_api_key_input.autocomplete = "off";
 os_key_line.appendChild(os_api_key_input);
-online_keys.appendChild(os_key_line);
+tab_page_settings.appendChild(os_key_line);
 
 const assrt_key_line = document.createElement("div");
 assrt_key_line.className = "line";
@@ -427,7 +479,7 @@ assrt_token_input.type = "password";
 assrt_token_input.id = "assrt_token";
 assrt_token_input.autocomplete = "off";
 assrt_key_line.appendChild(assrt_token_input);
-online_keys.appendChild(assrt_key_line);
+tab_page_settings.appendChild(assrt_key_line);
 
 const keys_line = document.createElement("div");
 keys_line.className = "line";
@@ -438,11 +490,20 @@ keys_line.appendChild(save_keys_button);
 const keys_status_elem = document.createElement("span");
 keys_status_elem.id = "keys_status";
 keys_line.appendChild(keys_status_elem);
-online_keys.appendChild(keys_line);
+tab_page_settings.appendChild(keys_line);
 
-search_block.appendChild(online_keys);
+// Simplified-to-Traditional conversion toggle (persisted in chrome.storage.local)
+const s2t_line = document.createElement("div");
+s2t_line.className = "line";
+s2t_line.appendChild(document.createTextNode("Simplified → Traditional (S2T): "));
+var s2t_enabled_checkbox = document.createElement("input");
+s2t_enabled_checkbox.type = "checkbox";
+s2t_enabled_checkbox.id = "s2t_enabled";
+s2t_enabled_checkbox.checked = true;
+s2t_line.appendChild(s2t_enabled_checkbox);
+tab_page_settings.appendChild(s2t_line);
 
-menu.appendChild(search_block);
+tab_page_search.appendChild(search_block);
 
 // Create grid container for settings
 const settingsGrid = document.createElement("div");
@@ -516,7 +577,7 @@ settingsGrid.appendChild(subtitle_font_line);
 settingsGrid.appendChild(subtitle_font_color_line);
 settingsGrid.appendChild(subtitle_background_color_line);
 
-menu.appendChild(settingsGrid);
+tab_page_main.appendChild(settingsGrid);
 
 // Add Simplified/Traditional Chinese conversion status display
 var converter_status_line = document.createElement("div");
@@ -547,7 +608,7 @@ donate_button.addEventListener("click", function() {
 });
 converter_status_line.appendChild(donate_button);
 
-menu.appendChild(converter_status_line);
+tab_page_settings.appendChild(converter_status_line);
 
 shadow.appendChild(menu);
 
@@ -641,6 +702,8 @@ button:active {
     right: 14px;
     bottom: 14px;
     width: 580px;
+    max-height: min(80vh, 600px);
+    overflow-y: auto;
     border: none;
     border-radius: 8px;
     box-shadow: 0 4px 16px rgba(0,0,0,0.15);
@@ -682,10 +745,19 @@ input:not([type="file"]) {
     box-sizing: border-box !important;
 }
 
+input[type="checkbox"] {
+    width: auto;
+    height: auto;
+    padding: 0;
+    accent-color: #4CAF50;
+}
+
 #video_elements_list {
     margin-top: 12px;
     padding-top: 8px;
     border-top: 1px solid #eee;
+    max-height: 200px;
+    overflow-y: auto;
 }
 
 .video_list_item {
@@ -749,6 +821,16 @@ input:not([type="file"]) {
 #upload_error_message {
     color: #d32f2f;
     margin-top: 4px;
+    flex: 1 1 0;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+#goto_search {
+    white-space: nowrap;
+    flex-shrink: 0;
 }
 
 fieldset {
@@ -764,26 +846,62 @@ legend {
     padding: 0 4px;
 }
 
-details#search_block {
+#search_block {
     border: 1px solid #eee;
     border-radius: 6px;
     padding: 8px 12px;
     margin-top: 12px;
 }
 
-details#search_block > summary {
-    color: #555;
+#tab_bar {
+    display: flex;
+    gap: 2px;
+    border-bottom: 1px solid #eee;
+}
+
+#tab_bar button {
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    border-radius: 0;
+    padding: 6px 12px;
+    color: #666;
+}
+
+#tab_bar button:hover {
+    background-color: #f5f5f5;
+}
+
+#tab_bar button.active {
+    color: #333;
     font-weight: 600;
-    cursor: pointer;
+    border-bottom-color: #4CAF50;
 }
 
-details#online_keys {
-    margin-top: 8px;
+.tab_page {
+    margin-top: 12px;
 }
 
-details#online_keys > summary {
-    color: #777;
-    cursor: pointer;
+#make_video_fullscreen {
+    position: absolute;
+    top: 16px;
+    right: 56px;
+    background: transparent;
+    border: none;
+    padding: 4px;
+    color: #999;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s;
+    width: auto;
+    height: auto;
+}
+
+#make_video_fullscreen:hover {
+    color: #333;
+    background-color: #f0f0f0;
 }
 
 #search_results {
@@ -856,6 +974,9 @@ details#online_keys > summary {
 `;
 shadow.appendChild(style);
 
+// Style applied → measure Main page and equalize the other tabs
+requestAnimationFrame(sync_tab_heights);
+
 var globalStyle = document.createElement("style");
 globalStyle.textContent = `
 .hover_video_element{
@@ -898,6 +1019,7 @@ function update_video_elements_list(){
         noVideosDiv.appendChild(chromeText);
         
         video_elements_list.appendChild(noVideosDiv);
+        sync_tab_heights();
         return;
     }
     for(var i = 0; i < video_elements.length; i++){
@@ -934,6 +1056,7 @@ function update_video_elements_list(){
         }());
         video_elements_list.append(video_list_item);
     }
+    sync_tab_heights();
 }
 
 // Improved: Use modern variable declaration and initialization
@@ -1031,6 +1154,7 @@ class ChineseConverter {
         this.initialized = false;
         this.openccLoaded = false;
         this.converter = null;
+        this.enabled = true;
         this.initOpenCC();
     }
     
@@ -1109,6 +1233,9 @@ class ChineseConverter {
     convert(text) {
         if (!text) return text;
         
+        // Skip conversion when the S2T toggle in Settings is off
+        if (!this.enabled) return text;
+        
         // Only convert when OpenCC is available, otherwise keep original text
         if (this.openccLoaded && this.converter) {
             try {
@@ -1128,7 +1255,8 @@ class ChineseConverter {
         return {
             initialized: this.initialized,
             openccLoaded: this.openccLoaded,
-            hasConverter: !!this.converter
+            hasConverter: !!this.converter,
+            enabled: this.enabled
         };
     }
 }
@@ -2919,6 +3047,7 @@ shadow_root.getElementById("subtitle_upload_button").addEventListener("click", a
     
     // Reset error messages and retry button
     error_message_element.textContent = "";
+    error_message_element.title = "";
     retry_button.style.display = "none";
     
     // Create progress indicator
@@ -2942,9 +3071,8 @@ shadow_root.getElementById("subtitle_upload_button").addEventListener("click", a
         
         progressIndicator.hide();
         
-        // Show success message with file name
-        error_message_element.textContent = `Loaded: ${fileName}`;
-        error_message_element.style.color = "green";
+        // Show subtitle source (shared status line)
+        set_subtitle_source(fileName);
         
     } catch (error) {
         progressIndicator.hide();
@@ -3129,6 +3257,7 @@ function handleUploadError(error, errorElement, retryButton) {
     
     errorElement.textContent = errorMessage;
     errorElement.style.color = "red";
+    errorElement.title = "";
     
     if (showRetry) {
         retryButton.style.display = "inline-block";
@@ -3165,6 +3294,12 @@ shadow_root.getElementById("subtitle_font").addEventListener("input", function()
     subtitle_font = this.value;
 });
 
+shadow_root.getElementById("s2t_enabled").addEventListener("change", function(){
+    chineseConverter.enabled = this.checked;
+    chrome.storage.local.set({ s2t_enabled: this.checked });
+    updateConverterStatus();
+});
+
 shadow_root.getElementById("make_video_fullscreen").addEventListener("click", function(){
     switch_fullscreen_video();
 });
@@ -3178,6 +3313,11 @@ function updateConverterStatus() {
     const statusElement = shadow_root.getElementById("converter_status");
     if (!statusElement) return;
     try {
+        if (chineseConverter && chineseConverter.enabled === false) {
+            statusElement.textContent = "S2T Disabled";
+            statusElement.style.color = "gray";
+            return;
+        }
         if (typeof window.OpenCC !== 'undefined' && typeof window.OpenCC.Converter === 'function') {
             const testConverter = window.OpenCC.Converter({ from: 'cn', to: 'tw' });
             const testResult = testConverter('测试');
@@ -3269,7 +3409,7 @@ document.addEventListener("fullscreenchange", function() {
 const SUBHD_BASE = "https://subhd.me";
 const ASSRT_BASE = "https://api.assrt.net";
 const OS_API_BASE = "https://api.opensubtitles.com";
-const OS_LANG_CODES = { en:'eng', zh:'zho', ja:'jpn', ko:'kor', es:'spa', fr:'fra', de:'deu', ru:'rus' };
+const OS_LANG_CODES = { 'zh-hans':'zh-cn', 'zh-hant':'zh-tw' };
 
 let search_results_cache = [];
 let search_result_loading = false;
@@ -3339,6 +3479,14 @@ function local_storage_keys(){
     });
 }
 
+// Persistent display of the loaded subtitle source (doubles as the upload status line)
+function set_subtitle_source(text){
+    if (!errorMessage) return;
+    errorMessage.textContent = text ? `Source: ${text}` : "";
+    errorMessage.style.color = text ? "green" : "";
+    errorMessage.title = text || "";
+}
+
 function set_search_status(text, color){
     search_status_elem.textContent = text;
     search_status_elem.style.color = color || '';
@@ -3347,9 +3495,19 @@ function set_search_status(text, color){
 // loose language filter for scrape providers listing tags like 简/繁/双语
 function scrape_lang_ok(text, language){
     if (language === 'all') return true;
-    if (language === 'zh') return /简|繁|中[文字]|双语|雙語|CHS|CHT|Chinese/i.test(text);
+    if (language === 'zh-hans') return /简|CHS|双语|雙語|中[文字]/i.test(text);
+    if (language === 'zh-hant') return /繁|CHT|中[文字]/i.test(text);
     if (language === 'en') return /英[字文语]|English|双语|雙語/i.test(text);
     return true;
+}
+
+// client-side guard; OpenSubtitles labels languages like en, zh-cn, zh-tw, pt-BR
+function os_lang_ok(attrLanguage, language){
+    if (language === 'all') return true;
+    const code = String(attrLanguage || '').toLowerCase();
+    if (language === 'zh-hans') return /^zh-(cn|sg|hans)/.test(code);
+    if (language === 'zh-hant') return /^zh-(tw|hk|mo|hant)/.test(code);
+    return code === language || code.indexOf(language + '-') === 0;
 }
 
 function parse_json_or_throw(text, provider){
@@ -3365,22 +3523,32 @@ async function search_opensubtitles(query, language){
     if (!keys.os_api_key) {
         throw new SubtitleError('OpenSubtitles API key missing — expand "API keys" below, save it, then retry.', 'API_KEY_MISSING');
     }
-    const params = new URLSearchParams();
-    params.set('query', query);
-    params.set('page', '1');
-    if (language !== 'all' && OS_LANG_CODES[language]) {
-        params.set('languages', OS_LANG_CODES[language]);
+    const fetch_page = async function(with_lang){
+        const params = new URLSearchParams();
+        params.set('query', query);
+        params.set('page', '1');
+        if (with_lang && language !== 'all') {
+            // API expects 2-letter codes (zh variants: zh-cn/zh-tw)
+            params.set('languages', OS_LANG_CODES[language] || language);
+        }
+        const resp = await bg_fetch_text({
+            url: OS_API_BASE + '/api/v1/subtitles?' + params.toString(),
+            headers: { 'Api-Key': keys.os_api_key, 'Accept': 'application/json' }
+        });
+        const json = parse_json_or_throw(resp.text, 'OpenSubtitles');
+        if (!resp.ok) {
+            throw new SubtitleError('OpenSubtitles search failed: ' + (json.message || ('HTTP ' + resp.status)), 'NETWORK_ERROR');
+        }
+        return json.data || [];
+    };
+    let data = await fetch_page(true);
+    // language code rejected server-side returns empty; retry unfiltered and rely on os_lang_ok
+    if (data.length === 0 && language !== 'all') {
+        data = await fetch_page(false);
     }
-    const resp = await bg_fetch_text({
-        url: OS_API_BASE + '/api/v1/subtitles?' + params.toString(),
-        headers: { 'Api-Key': keys.os_api_key, 'Accept': 'application/json' }
-    });
-    const json = parse_json_or_throw(resp.text, 'OpenSubtitles');
-    if (!resp.ok) {
-        throw new SubtitleError('OpenSubtitles search failed: ' + (json.message || ('HTTP ' + resp.status)), 'NETWORK_ERROR');
-    }
-    return (json.data || [])
+    return data
         .filter(function(item){ return item.attributes && item.attributes.files && item.attributes.files.length > 0; })
+        .filter(function(item){ return os_lang_ok(item.attributes.language, language); })
         .map(function(item){
             const attr = item.attributes;
             const title = attr.release || attr.title || attr.movie_title || attr.long_title || 'Unknown';
@@ -3388,6 +3556,17 @@ async function search_opensubtitles(query, language){
             return { title: title, meta: meta, pay: { kind: 'os', file_id: attr.files[0].file_id } };
         })
         .slice(0, 30);
+}
+
+// assrt exposes structured lang flags (langchs/langcht/langeng/langdou); prefer them over desc text
+function assrt_lang_ok(sub, language){
+    if (language === 'all') return true;
+    const list = sub.lang && sub.lang.langlist;
+    if (!list) return true; // rows without lang info are kept rather than wrongly dropped
+    if (language === 'zh-hans') return !!(list.langchs || list.langdou);
+    if (language === 'zh-hant') return !!list.langcht;
+    if (language === 'en') return !!(list.langeng || list.langdou);
+    return true;
 }
 
 async function search_assrt(query, language){
@@ -3411,7 +3590,7 @@ async function search_assrt(query, language){
             : '';
         const meta = [langText, sub.subtype].filter(Boolean).join(' · ');
         const result = { title: title, meta: meta, pay: { kind: 'assrt', id: sub.id } };
-        return scrape_lang_ok(title + ' ' + meta, language) ? result : null;
+        return assrt_lang_ok(sub, language) ? result : null;
     }).filter(Boolean).slice(0, 30);
 }
 
@@ -3439,8 +3618,8 @@ async function search_subhd(query, language){
         if (results.length >= 30) break;
         const entry = byCode[code];
         if (!entry.text) continue;
-        const container = entry.anchor.closest('table, li, div') || entry.anchor;
-        const context = ((container && container.textContent) || '').slice(0, 500);
+        const container = entry.anchor.closest('.row, table, li') || entry.anchor.closest('div') || entry.anchor;
+        const context = ((container && container.textContent) || '').slice(0, 800);
         if (!scrape_lang_ok(context, language)) continue;
         const metaParts = Array.from(new Set(context.match(/简体|繁体|英语|双语|SRT|ASS/g) || []));
         results.push({
@@ -3687,6 +3866,7 @@ async function load_search_result(idx, row){
         await apply_result_file(file, progress);
         mark_search_result_selected(row);
         set_search_status('Loaded: ' + result.title, 'green');
+        set_subtitle_source(result.title);
     } catch (error) {
         console.error('Online subtitle load failed:', error);
         set_search_status(error.message || 'Load failed', 'red');
@@ -3696,15 +3876,9 @@ async function load_search_result(idx, row){
     }
 }
 
-// Provider change: language select works on OpenSubtitles (API) and SubHD (client-side list filter)
-function update_search_language_state(){
-    const provider = search_provider.value;
-    search_language.disabled = provider !== 'opensubtitles' && provider !== 'subhd';
-}
-search_provider.addEventListener("change", function(){
-    update_search_language_state();
-});
-update_search_language_state();
+// Provider change: rebuild language options (each provider only lists languages it can filter)
+search_provider.addEventListener("change", rebuild_search_language);
+rebuild_search_language();
 
 // Search
 shadow_root.getElementById("search_button").addEventListener("click", async function(event){
@@ -3717,7 +3891,7 @@ shadow_root.getElementById("search_button").addEventListener("click", async func
         return;
     }
     const provider = search_provider.value;
-    const language = search_language.disabled ? 'all' : search_language.value;
+    const language = search_language.value;
 
     set_search_status('', '');
     const progress = new ProgressIndicator(search_progress_container);
@@ -3754,6 +3928,15 @@ chrome.storage.local.get(['os_api_key', 'assrt_token'], function(stored){
     if (stored.os_api_key) os_api_key_input.value = stored.os_api_key;
     if (stored.assrt_token) assrt_token_input.value = stored.assrt_token;
     update_keys_status(stored);
+});
+
+// Restore S2T toggle state (default on when unset)
+chrome.storage.local.get(['s2t_enabled'], function(stored){
+    if (typeof stored.s2t_enabled === 'boolean') {
+        chineseConverter.enabled = stored.s2t_enabled;
+        s2t_enabled_checkbox.checked = stored.s2t_enabled;
+        updateConverterStatus();
+    }
 });
 
 shadow_root.getElementById("save_keys").addEventListener("click", function(){
