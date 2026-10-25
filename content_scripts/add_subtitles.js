@@ -308,6 +308,142 @@ subtitle_file_fieldset.appendChild(progressContainer);
 
 menu.appendChild(subtitle_file_fieldset);
 
+// ======= Online subtitle search (OpenSubtitles / assrt / SubHD) =======
+const search_block = document.createElement("details");
+search_block.id = "search_block";
+search_block.open = true;
+
+const search_summary = document.createElement("summary");
+search_summary.textContent = "Search subtitles online:";
+search_block.appendChild(search_summary);
+
+// Detected name hint (from page title chain, filled later)
+const search_hint = document.createElement("span");
+search_hint.id = "search_hint";
+search_hint.className = "detected_hint";
+search_block.appendChild(search_hint);
+
+// Search input line
+const search_input_line = document.createElement("div");
+search_input_line.className = "line";
+search_input_line.appendChild(document.createTextNode("Search: "));
+
+const search_query_input = document.createElement("input");
+search_query_input.type = "text";
+search_query_input.id = "search_query_input";
+search_query_input.autocomplete = "off";
+search_query_input.placeholder = "Movie or release name";
+search_input_line.appendChild(search_query_input);
+
+const search_button = document.createElement("button");
+search_button.id = "search_button";
+search_button.textContent = "Search";
+search_input_line.appendChild(search_button);
+
+search_block.appendChild(search_input_line);
+
+// Provider + language line
+const search_provider_line = document.createElement("div");
+search_provider_line.className = "line";
+search_provider_line.appendChild(document.createTextNode("Provider: "));
+
+const search_provider = document.createElement("select");
+search_provider.id = "search_provider";
+[
+    ["opensubtitles", "OpenSubtitles"],
+    ["assrt", "Shooter (assrt.net)"],
+    ["subhd", "SubHD"]
+].forEach(function(pair){
+    const opt = document.createElement("option");
+    opt.value = pair[0];
+    opt.textContent = pair[1];
+    search_provider.appendChild(opt);
+});
+search_provider_line.appendChild(search_provider);
+
+search_provider_line.appendChild(document.createTextNode(" Language: "));
+
+const search_language = document.createElement("select");
+search_language.id = "search_language";
+[
+    ["all", "All"],
+    ["en", "English"],
+    ["zh", "Chinese"],
+    ["ja", "Japanese"],
+    ["ko", "Korean"],
+    ["es", "Spanish"],
+    ["fr", "French"],
+    ["de", "German"],
+    ["ru", "Russian"]
+].forEach(function(pair){
+    const opt = document.createElement("option");
+    opt.value = pair[0];
+    opt.textContent = pair[1];
+    search_language.appendChild(opt);
+});
+search_language.title = "OpenSubtitles: API-side filter. SubHD: filters the returned list client-side. Not applied on assrt.";
+search_provider_line.appendChild(search_language);
+
+search_block.appendChild(search_provider_line);
+
+// Results list (scrollable)
+const search_results = document.createElement("div");
+search_results.id = "search_results";
+search_block.appendChild(search_results);
+
+// Status message
+const search_status_elem = document.createElement("span");
+search_status_elem.id = "search_status";
+search_block.appendChild(search_status_elem);
+
+// Progress container (reuses .loading-progress styles)
+const search_progress_container = document.createElement("div");
+search_progress_container.id = "search_progress_container";
+search_block.appendChild(search_progress_container);
+
+// Collapsible API key settings
+const online_keys = document.createElement("details");
+online_keys.id = "online_keys";
+
+const online_keys_summary = document.createElement("summary");
+online_keys_summary.textContent = "API keys";
+online_keys.appendChild(online_keys_summary);
+
+const os_key_line = document.createElement("div");
+os_key_line.className = "line";
+os_key_line.appendChild(document.createTextNode("OpenSubtitles API key: "));
+const os_api_key_input = document.createElement("input");
+os_api_key_input.type = "password";
+os_api_key_input.id = "os_api_key";
+os_api_key_input.autocomplete = "off";
+os_key_line.appendChild(os_api_key_input);
+online_keys.appendChild(os_key_line);
+
+const assrt_key_line = document.createElement("div");
+assrt_key_line.className = "line";
+assrt_key_line.appendChild(document.createTextNode("assrt token: "));
+const assrt_token_input = document.createElement("input");
+assrt_token_input.type = "password";
+assrt_token_input.id = "assrt_token";
+assrt_token_input.autocomplete = "off";
+assrt_key_line.appendChild(assrt_token_input);
+online_keys.appendChild(assrt_key_line);
+
+const keys_line = document.createElement("div");
+keys_line.className = "line";
+const save_keys_button = document.createElement("button");
+save_keys_button.id = "save_keys";
+save_keys_button.textContent = "Save keys";
+keys_line.appendChild(save_keys_button);
+const keys_status_elem = document.createElement("span");
+keys_status_elem.id = "keys_status";
+keys_line.appendChild(keys_status_elem);
+online_keys.appendChild(keys_line);
+
+search_block.appendChild(online_keys);
+
+menu.appendChild(search_block);
+
 // Create grid container for settings
 const settingsGrid = document.createElement("div");
 settingsGrid.id = "settings_grid";
@@ -626,6 +762,96 @@ legend {
     color: #555;
     font-weight: 600;
     padding: 0 4px;
+}
+
+details#search_block {
+    border: 1px solid #eee;
+    border-radius: 6px;
+    padding: 8px 12px;
+    margin-top: 12px;
+}
+
+details#search_block > summary {
+    color: #555;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+details#online_keys {
+    margin-top: 8px;
+}
+
+details#online_keys > summary {
+    color: #777;
+    cursor: pointer;
+}
+
+#search_results {
+    max-height: 180px;
+    overflow-y: auto;
+    margin-top: 10px;
+}
+
+.search_result_item {
+    overflow: hidden;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    margin-top: 4px;
+    padding: 6px 8px;
+    cursor: pointer;
+    background-color: #f9f9f9;
+    transition: background-color 0.2s;
+}
+
+.search_result_item:hover {
+    background-color: #eee;
+}
+
+.search_result_item.selected_result {
+    background-color: #e8f5e9;
+    border-color: #4CAF50;
+    color: #2e7d32;
+}
+
+.result_title_line {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.result_meta {
+    display: block;
+    font-size: 11px;
+    color: #888;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.search_result_item.selected_result .result_meta {
+    color: #2e7d32;
+}
+
+.detected_hint {
+    color: #999;
+    font-size: 11px;
+    display: block;
+    margin-top: 4px;
+}
+
+#search_status {
+    display: block;
+    margin-top: 6px;
+}
+
+.search_empty_box {
+    border: 1px dashed #ccc;
+    border-radius: 4px;
+    padding: 8px;
+    color: #666;
+    text-align: center;
+    background-color: #fafafa;
 }
 `;
 shadow.appendChild(style);
@@ -2739,7 +2965,7 @@ async function handleUrlUpload(url, progressIndicator) {
         progressIndicator.updateProgress(50, 'Parsing file type...');
         
         if(blob.type === "application/zip" || url.toLowerCase().endsWith('.zip')){
-            await handleZipFile(blob, progressIndicator);
+            await handleZipFile(await blob_to_base64(blob), progressIndicator);
         } else {
             progressIndicator.updateProgress(70, 'Reading subtitle content...');
             const text = await blob.text();
@@ -2791,13 +3017,26 @@ async function handleFileUpload(file, progressIndicator) {
 }
 
 // New: Handle ZIP files
-async function handleZipFile(blob, progressIndicator) {
+function blob_to_base64(blob){
+    return blob.arrayBuffer().then(function(buffer){
+        const bytes = new Uint8Array(buffer);
+        const chunk = 0x8000;
+        let binary = '';
+        for (let i = 0; i < bytes.length; i += chunk) {
+            binary += String.fromCharCode.apply(null, bytes.subarray(i, Math.min(i + chunk, bytes.length)));
+        }
+        return btoa(binary);
+    });
+}
+
+async function handleZipFile(base64, progressIndicator) {
     try {
         progressIndicator.updateProgress(30, 'Extracting files...');
-        
-        const buffer = await blob.arrayBuffer();
+
         const zip = new JSZip();
-        const zipContent = await zip.loadAsync(buffer);
+        // [reason] hand jszip the base64 string and let it decode itself — its type check
+        // uses instanceof and rejects cross-realm ArrayBuffers from Blob.arrayBuffer
+        const zipContent = await zip.loadAsync(base64, { base64: true });
         
         progressIndicator.updateProgress(50, 'Searching for subtitle files...');
         
@@ -3023,5 +3262,519 @@ document.addEventListener("fullscreenchange", function() {
         restoreVideoState();
     }
 });
+
+// ======= Online subtitle search logic =======
+
+// shortcut: subhd mirrors drift and get region-blocked (tv/com flagged "possibly walled"); update this when the site moves
+const SUBHD_BASE = "https://subhd.me";
+const ASSRT_BASE = "https://api.assrt.net";
+const OS_API_BASE = "https://api.opensubtitles.com";
+const OS_LANG_CODES = { en:'eng', zh:'zho', ja:'jpn', ko:'kor', es:'spa', fr:'fra', de:'deu', ru:'rus' };
+
+let search_results_cache = [];
+let search_result_loading = false;
+
+function clean_page_title(raw){
+    if (!raw) return '';
+    const title = raw.trim();
+    if (!title) return '';
+    // cut common "Movie Name | Site Name"-style suffixes, keep the first segment
+    const first = title.split(/\s*[|\-–—·»«:]\s*/)[0].trim();
+    if (first.length >= 2) return first;
+    return title;
+}
+
+function detect_video_name(){
+    try {
+        const titleEl = document.querySelector("head > title");
+        let name = clean_page_title(titleEl ? titleEl.textContent : '');
+        if (!name) {
+            const og = document.querySelector('meta[property="og:title"], meta[property="twitter:title"], meta[name="og:title"]');
+            name = clean_page_title(og ? og.getAttribute('content') : '');
+        }
+        if (!name) {
+            const h1 = document.querySelector("h1");
+            name = clean_page_title(h1 ? h1.textContent : '');
+        }
+        return name;
+    } catch (_error) {
+        return '';
+    }
+}
+
+function bg_send_message(request){
+    return new Promise(function(resolve, reject){
+        try {
+            chrome.runtime.sendMessage(request, function(resp){
+                const err = chrome.runtime.lastError;
+                if (err) {
+                    reject(new SubtitleError('Background fetch failed: ' + err.message, 'NETWORK_ERROR'));
+                } else if (!resp) {
+                    reject(new SubtitleError('No response from background script', 'NETWORK_ERROR'));
+                } else {
+                    resolve(resp);
+                }
+            });
+        } catch (error) {
+            reject(new SubtitleError('Background fetch failed: ' + error.message, 'NETWORK_ERROR'));
+        }
+    });
+}
+
+async function bg_fetch_text(request){
+    const resp = await bg_send_message(Object.assign({ action: 'sub_fetch_text' }, request));
+    if (resp.error) throw new SubtitleError('Network fetch failed: ' + resp.error, 'NETWORK_ERROR');
+    return resp;
+}
+
+async function bg_fetch_file(request){
+    const resp = await bg_send_message(Object.assign({ action: 'sub_fetch_file' }, request));
+    if (resp.error) throw new SubtitleError('Network fetch failed: ' + resp.error, 'NETWORK_ERROR');
+    return resp;
+}
+
+function local_storage_keys(){
+    return new Promise(function(resolve){
+        chrome.storage.local.get(['os_api_key', 'assrt_token'], resolve);
+    });
+}
+
+function set_search_status(text, color){
+    search_status_elem.textContent = text;
+    search_status_elem.style.color = color || '';
+}
+
+// loose language filter for scrape providers listing tags like 简/繁/双语
+function scrape_lang_ok(text, language){
+    if (language === 'all') return true;
+    if (language === 'zh') return /简|繁|中[文字]|双语|雙語|CHS|CHT|Chinese/i.test(text);
+    if (language === 'en') return /英[字文语]|English|双语|雙語/i.test(text);
+    return true;
+}
+
+function parse_json_or_throw(text, provider){
+    try {
+        return JSON.parse(text);
+    } catch (_error) {
+        throw new SubtitleError(provider + ' returned invalid JSON', 'PARSE_ERROR');
+    }
+}
+
+async function search_opensubtitles(query, language){
+    const keys = await local_storage_keys();
+    if (!keys.os_api_key) {
+        throw new SubtitleError('OpenSubtitles API key missing — expand "API keys" below, save it, then retry.', 'API_KEY_MISSING');
+    }
+    const params = new URLSearchParams();
+    params.set('query', query);
+    params.set('page', '1');
+    if (language !== 'all' && OS_LANG_CODES[language]) {
+        params.set('languages', OS_LANG_CODES[language]);
+    }
+    const resp = await bg_fetch_text({
+        url: OS_API_BASE + '/api/v1/subtitles?' + params.toString(),
+        headers: { 'Api-Key': keys.os_api_key, 'Accept': 'application/json' }
+    });
+    const json = parse_json_or_throw(resp.text, 'OpenSubtitles');
+    if (!resp.ok) {
+        throw new SubtitleError('OpenSubtitles search failed: ' + (json.message || ('HTTP ' + resp.status)), 'NETWORK_ERROR');
+    }
+    return (json.data || [])
+        .filter(function(item){ return item.attributes && item.attributes.files && item.attributes.files.length > 0; })
+        .map(function(item){
+            const attr = item.attributes;
+            const title = attr.release || attr.title || attr.movie_title || attr.long_title || 'Unknown';
+            const meta = [attr.language, (attr.download_count || 0) + ' downloads'].filter(Boolean).join(' · ');
+            return { title: title, meta: meta, pay: { kind: 'os', file_id: attr.files[0].file_id } };
+        })
+        .slice(0, 30);
+}
+
+async function search_assrt(query, language){
+    const keys = await local_storage_keys();
+    if (!keys.assrt_token) {
+        throw new SubtitleError('assrt token missing — expand "API keys" below, save it, then retry.', 'API_KEY_MISSING');
+    }
+    const resp = await bg_fetch_text({
+        url: ASSRT_BASE + '/v1/sub/search?token=' + encodeURIComponent(keys.assrt_token) + '&q=' + encodeURIComponent(query) + '&cnt=20',
+        headers: { 'Accept': 'application/json' }
+    });
+    const json = parse_json_or_throw(resp.text, 'assrt');
+    if (!resp.ok || json.status !== 0) {
+        throw new SubtitleError('assrt search failed: ' + (json.status_msg || json.error || ('HTTP ' + resp.status)), 'NETWORK_ERROR');
+    }
+    const subs = (json.sub && json.sub.subs) || [];
+    return subs.map(function(sub){
+        const title = sub.native_name || sub.name || ('#' + sub.id);
+        const langText = sub.lang && typeof sub.lang === 'object'
+            ? Object.values(sub.lang).filter(function(v){ return typeof v === 'string'; }).join(' / ')
+            : '';
+        const meta = [langText, sub.subtype].filter(Boolean).join(' · ');
+        const result = { title: title, meta: meta, pay: { kind: 'assrt', id: sub.id } };
+        return scrape_lang_ok(title + ' ' + meta, language) ? result : null;
+    }).filter(Boolean).slice(0, 30);
+}
+
+async function search_subhd(query, language){
+    const resp = await bg_fetch_text({ url: SUBHD_BASE + '/search/' + encodeURIComponent(query) });
+    if (!resp.ok) {
+        throw new SubtitleError('SubHD search failed (HTTP ' + resp.status + ')', 'NETWORK_ERROR');
+    }
+    const doc = new DOMParser().parseFromString(resp.text, 'text/html');
+    const anchors = Array.from(doc.querySelectorAll('a[href^="/a/"]'));
+    // [reason] each result row links the same /a/<code> twice (movie name + edition line);
+    // keep the longest anchor text per code so the release/edition line wins
+    const byCode = {};
+    for (const anchor of anchors) {
+        const idMatch = (anchor.getAttribute('href') || '').match(/\/a\/([A-Za-z0-9]+)/);
+        if (!idMatch) continue;
+        const code = idMatch[1];
+        const text = (anchor.textContent || '').trim();
+        if (!byCode[code] || text.length > byCode[code].text.length) {
+            byCode[code] = { anchor: anchor, text: text };
+        }
+    }
+    const results = [];
+    for (const code in byCode) {
+        if (results.length >= 30) break;
+        const entry = byCode[code];
+        if (!entry.text) continue;
+        const container = entry.anchor.closest('table, li, div') || entry.anchor;
+        const context = ((container && container.textContent) || '').slice(0, 500);
+        if (!scrape_lang_ok(context, language)) continue;
+        const metaParts = Array.from(new Set(context.match(/简体|繁体|英语|双语|SRT|ASS/g) || []));
+        results.push({
+            title: entry.text,
+            meta: metaParts.length ? metaParts.join(' · ') : 'SubHD',
+            pay: { kind: 'subhd', id: code, item: SUBHD_BASE + '/a/' + code }
+        });
+    }
+    return results;
+}
+
+function run_search(provider, query, language){
+    switch (provider) {
+        case 'opensubtitles': return search_opensubtitles(query, language);
+        case 'assrt': return search_assrt(query, language);
+        case 'subhd': return search_subhd(query, language);
+        default: throw new SubtitleError('Unknown provider: ' + provider, 'GENERAL');
+    }
+}
+
+async function download_opensubtitles(pay){
+    const keys = await local_storage_keys();
+    if (!keys.os_api_key) {
+        throw new SubtitleError('OpenSubtitles API key missing.', 'API_KEY_MISSING');
+    }
+    const dlResp = await bg_fetch_text({
+        url: OS_API_BASE + '/api/v1/download?file_id=' + encodeURIComponent(pay.file_id),
+        method: 'POST',
+        headers: { 'Api-Key': keys.os_api_key, 'Accept': 'application/json' }
+    });
+    const dl = parse_json_or_throw(dlResp.text, 'OpenSubtitles');
+    if (!dlResp.ok || !dl.link) {
+        throw new SubtitleError('OpenSubtitles download failed: ' + (dl.message || dl.error || ('HTTP ' + dlResp.status)), 'NETWORK_ERROR');
+    }
+    const fileResp = await bg_fetch_file({ url: dl.link });
+    if (!fileResp.ok) {
+        throw new SubtitleError('OpenSubtitles file download failed (HTTP ' + fileResp.status + ')', 'NETWORK_ERROR');
+    }
+    return { base64: fileResp.base64, mime: fileResp.mime };
+}
+
+async function download_assrt(pay){
+    const keys = await local_storage_keys();
+    if (!keys.assrt_token) {
+        throw new SubtitleError('assrt token missing.', 'API_KEY_MISSING');
+    }
+    const detailResp = await bg_fetch_text({
+        url: ASSRT_BASE + '/v1/sub/detail?token=' + encodeURIComponent(keys.assrt_token) + '&id=' + encodeURIComponent(pay.id) + '&filelist=1',
+        headers: { 'Accept': 'application/json' }
+    });
+    const json = parse_json_or_throw(detailResp.text, 'assrt');
+    if (!detailResp.ok || json.status !== 0) {
+        throw new SubtitleError('assrt detail failed: ' + (json.status_msg || ('HTTP ' + detailResp.status)), 'NETWORK_ERROR');
+    }
+    const first = json.sub && json.sub.subs && json.sub.subs[0];
+    const filelist = (first && first.filelist) || [];
+    const supportedExts = ['srt', 'vtt', 'ass', 'ssa'];
+    let chosen = null;
+    for (const file of filelist) {
+        const name = file.name || file.url || '';
+        const ext = name.split('.').pop().toLowerCase();
+        if (file.url && supportedExts.indexOf(ext) !== -1) {
+            chosen = file;
+            break;
+        }
+    }
+    if (!chosen) chosen = filelist.find(function(file){ return file.url; }) || null;
+    // the onthefly single-file endpoint has been refusing downloads (HTTP 493,
+    // "服务器抽风"); fall back to the whole-pack download URL when it does
+    let fileResp = null;
+    if (chosen) {
+        fileResp = await bg_fetch_file({ url: chosen.url });
+        if (!fileResp.ok) {
+            fileResp = null;
+        }
+    }
+    if (!fileResp && first && first.url) {
+        const packName = (first.filename || '').toLowerCase();
+        if (/\.rar$|\.7z$/.test(packName)) {
+            throw new SubtitleError('assrt pack is RAR/7z (not supported) and its single-file endpoint refused the download — pick another result or provider.', 'RAR_NOT_SUPPORTED');
+        }
+        fileResp = await bg_fetch_file({ url: first.url });
+    }
+    if (!fileResp || !fileResp.ok) {
+        throw new SubtitleError('assrt file download failed' + (fileResp ? ' (HTTP ' + fileResp.status + ')' : '') + ' — try another provider.', 'NETWORK_ERROR');
+    }
+    return { base64: fileResp.base64, mime: fileResp.mime };
+}
+
+async function download_subhd(pay){
+    // [reason] SubHD requires visiting the detail page before prepare-download honors us;
+    // warm up with a credentialed GET so the server session matches a real page load
+    const warmup = await bg_fetch_text({ url: pay.item, credentials: 'include' });
+    if (!warmup.ok) {
+        throw new SubtitleError('SubHD detail page failed (HTTP ' + warmup.status + ')', 'NETWORK_ERROR');
+    }
+    const resp = await bg_fetch_text({
+        url: SUBHD_BASE + '/api/sub/prepare-download',
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json; charset=utf-8',
+            'X-Requested-With': 'XMLHttpRequest',
+            'Accept': 'application/json'
+        },
+        body: JSON.stringify({ sid: pay.id }),
+        credentials: 'include'
+    });
+    const json = parse_json_or_throw(resp.text, 'SubHD');
+    if (!json || json.success !== true || typeof json.url !== 'string' || json.url.indexOf('/down/') !== 0) {
+        const reason = (json && (json.msg || json.error)) || 'unknown error';
+        throw new SubtitleError('SubHD download blocked: ' + reason + ' — try another provider.', 'SUBHD_BLOCKED');
+    }
+    // visit the one-time temp page to arm the token (its body is never parsed)
+    const downUrl = json.url.indexOf('http') === 0 ? json.url : SUBHD_BASE + json.url;
+    await bg_fetch_text({ url: downUrl, credentials: 'include' });
+    // exchange the armed token for the real file URL
+    const api = await bg_fetch_text({
+        url: SUBHD_BASE + '/api/sub/down',
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json; charset=utf-8',
+            'X-Requested-With': 'XMLHttpRequest',
+            'Accept': 'application/json'
+        },
+        body: JSON.stringify({ sid: pay.id, cap: '' }),
+        credentials: 'include'
+    });
+    const data = parse_json_or_throw(api.text, 'SubHD');
+    if (!data || data.success !== true || typeof data.url !== 'string' || !data.url) {
+        const reason = (data && data.msg) || 'unknown error';
+        throw new SubtitleError('SubHD download failed: ' + reason + ' — try again later or use another provider.', 'SUBHD_BLOCKED');
+    }
+    const fileUrl = data.url.indexOf('http') === 0 ? data.url : SUBHD_BASE + data.url;
+    const fileResp = await bg_fetch_file({ url: fileUrl, credentials: 'include' });
+    if (!fileResp.ok) {
+        throw new SubtitleError('SubHD file download failed (HTTP ' + fileResp.status + ')', 'NETWORK_ERROR');
+    }
+    return { base64: fileResp.base64, mime: fileResp.mime };
+}
+
+function download_result(pay){
+    switch (pay.kind) {
+        case 'os': return download_opensubtitles(pay);
+        case 'assrt': return download_assrt(pay);
+        case 'subhd': return download_subhd(pay);
+        default: throw new SubtitleError('Unknown result type: ' + pay.kind, 'GENERAL');
+    }
+}
+
+function base64_head_bytes(base64, count){
+    try {
+        const binary = atob(base64.slice(0, Math.ceil(count / 3) * 4));
+        const bytes = [];
+        for (let i = 0; i < binary.length && bytes.length < count; i++) {
+            bytes.push(binary.charCodeAt(i));
+        }
+        return bytes;
+    } catch (_error) {
+        return [];
+    }
+}
+
+function base64_to_utf8_text(base64){
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i);
+    }
+    return new TextDecoder('utf-8').decode(bytes);
+}
+
+async function apply_result_file(file, progressIndicator){
+    progressIndicator.updateProgress(30, 'Checking file type...');
+    const head = base64_head_bytes(file.base64, 4);
+    if (head[0] === 0x52 && head[1] === 0x61 && head[2] === 0x72 && head[3] === 0x21) {
+        throw new SubtitleError('RAR archive is not supported — look for a ZIP version or another result.', 'RAR_NOT_SUPPORTED');
+    }
+    if (head[0] === 0x50 && head[1] === 0x4B) {
+        await handleZipFile(file.base64, progressIndicator);
+    } else {
+        progressIndicator.updateProgress(70, 'Parsing subtitles...');
+        await parse_subtitles(base64_to_utf8_text(file.base64));
+    }
+    progressIndicator.updateProgress(100, 'Loaded!');
+}
+
+function render_search_results(results){
+    search_results_cache = results;
+    while (search_results.firstChild) {
+        search_results.removeChild(search_results.firstChild);
+    }
+    if (results.length === 0) {
+        const emptyBox = document.createElement("div");
+        emptyBox.className = "search_empty_box";
+        emptyBox.textContent = "No subtitles found.";
+        search_results.appendChild(emptyBox);
+        return;
+    }
+    results.forEach(function(result, idx){
+        const row = document.createElement("div");
+        row.className = "search_result_item";
+
+        const titleLine = document.createElement("span");
+        titleLine.className = "result_title_line";
+        titleLine.textContent = result.title;
+        row.appendChild(titleLine);
+
+        const metaLine = document.createElement("span");
+        metaLine.className = "result_meta";
+        metaLine.textContent = result.meta || '';
+        row.appendChild(metaLine);
+
+        row.addEventListener("click", function(){
+            load_search_result(idx, row);
+        });
+        search_results.appendChild(row);
+    });
+}
+
+function mark_search_result_selected(row){
+    const rows = search_results.querySelectorAll(".search_result_item");
+    for (const other of rows) {
+        other.classList.remove("selected_result");
+    }
+    if (row) {
+        row.classList.add("selected_result");
+    }
+}
+
+async function load_search_result(idx, row){
+    if (search_result_loading) return;
+    const result = search_results_cache[idx];
+    if (!result) return;
+    if (!the_video_element) {
+        set_search_status('Please select one of the videos above first.', 'red');
+        return;
+    }
+    set_search_status('', '');
+    search_result_loading = true;
+    const progress = new ProgressIndicator(search_progress_container);
+    progress.show('Downloading ' + result.pay.kind + ' subtitle...');
+    try {
+        const file = await download_result(result.pay);
+        await apply_result_file(file, progress);
+        mark_search_result_selected(row);
+        set_search_status('Loaded: ' + result.title, 'green');
+    } catch (error) {
+        console.error('Online subtitle load failed:', error);
+        set_search_status(error.message || 'Load failed', 'red');
+    } finally {
+        progress.hide();
+        search_result_loading = false;
+    }
+}
+
+// Provider change: language select works on OpenSubtitles (API) and SubHD (client-side list filter)
+function update_search_language_state(){
+    const provider = search_provider.value;
+    search_language.disabled = provider !== 'opensubtitles' && provider !== 'subhd';
+}
+search_provider.addEventListener("change", function(){
+    update_search_language_state();
+});
+update_search_language_state();
+
+// Search
+shadow_root.getElementById("search_button").addEventListener("click", async function(event){
+    event.preventDefault();
+    event.stopPropagation();
+
+    const query = search_query_input.value.trim();
+    if (!query) {
+        set_search_status('Enter a search term first.', 'red');
+        return;
+    }
+    const provider = search_provider.value;
+    const language = search_language.disabled ? 'all' : search_language.value;
+
+    set_search_status('', '');
+    const progress = new ProgressIndicator(search_progress_container);
+    progress.show('Searching ' + search_provider.options[search_provider.selectedIndex].text + '...');
+    search_button.disabled = true;
+    try {
+        const results = await run_search(provider, query, language);
+        render_search_results(results);
+        if (results.length > 0) {
+            set_search_status('Found ' + results.length + ' results — click one to load.', 'green');
+        } else {
+            set_search_status('', '');
+        }
+    } catch (error) {
+        console.error('Online search failed:', error);
+        render_search_results([]);
+        set_search_status(error.message || 'Search failed', 'red');
+    } finally {
+        progress.hide();
+        search_button.disabled = false;
+    }
+});
+
+// API keys storage
+function update_keys_status(stored){
+    const parts = [];
+    parts.push('OpenSubtitles: ' + (stored.os_api_key ? 'set' : 'not set'));
+    parts.push('assrt: ' + (stored.assrt_token ? 'set' : 'not set'));
+    keys_status_elem.textContent = parts.join(' · ');
+    keys_status_elem.style.color = '';
+}
+
+chrome.storage.local.get(['os_api_key', 'assrt_token'], function(stored){
+    if (stored.os_api_key) os_api_key_input.value = stored.os_api_key;
+    if (stored.assrt_token) assrt_token_input.value = stored.assrt_token;
+    update_keys_status(stored);
+});
+
+shadow_root.getElementById("save_keys").addEventListener("click", function(){
+    const osKey = os_api_key_input.value.trim();
+    const assrtToken = assrt_token_input.value.trim();
+    chrome.storage.local.set({ os_api_key: osKey, assrt_token: assrtToken }, function(){
+        update_keys_status({ os_api_key: osKey, assrt_token: assrtToken });
+        keys_status_elem.textContent += ' (saved)';
+        keys_status_elem.style.color = 'green';
+    });
+});
+
+// Prefill search query from page title chain
+(function prefill_search_query(){
+    const name = detect_video_name();
+    if (name) {
+        search_query_input.value = name;
+        search_hint.textContent = 'Detected from page title: ' + name;
+    } else {
+        search_hint.textContent = 'Video name not detected, enter search keywords manually.';
+    }
+})();
 
 })();
