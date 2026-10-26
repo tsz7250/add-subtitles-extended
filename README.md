@@ -4,24 +4,32 @@ A simple yet powerful Firefox and Chrome browser extension that lets you add ext
 
 ## Screenshots
 
-| Video Preview | Settings Panel |
-| :---: | :---: |
-| ![Video Preview](assets/screenshots/screen.png) | ![Settings Panel](assets/screenshots/panel.png) |
+| Video Preview |
+| :---: |
+| ![Video Preview](assets/screenshots/screen.png) |
 
-| Video Controls |  |
-| :---: | :---: |
-| ![Video Controls](assets/screenshots/bar.png) |  |
+| Main Panel | Search Panel | Settings Panel |
+| :---: | :---: | :---: |
+| ![Main Panel](assets/screenshots/panel_main.png) | ![Search Panel](assets/screenshots/panel_search.png) | ![Settings Panel](assets/screenshots/panel_setting.png) |
+
+| Video Controls |
+| :---: |
+| ![Video Controls](assets/screenshots/bar.png) |
 
 ## Project Overview
 This project is a repaired and enhanced version based on the original add-subtitles extension. Major improvements include:
 - Added support for ASS/SSA subtitle formats
+- Added online subtitle search (OpenSubtitles, Shooter/assrt, SubHD)
+- Extended archive support to ZIP / 7z / RAR
 - Automatic conversion from Simplified Chinese to Traditional Chinese
 - Fixed fullscreen playback
 - Improved appearance
 
 ## Features
 - Supports SRT, VTT, and ASS/SSA subtitle formats
-- Supports subtitles inside ZIP archives
+- Supports subtitles inside ZIP / 7z / RAR archives
+- Built-in online subtitle search (OpenSubtitles, Shooter/assrt, SubHD) with automatic title detection and language filter
+- API key support for OpenSubtitles and assrt (SubHD needs no key)
 - Automatic conversion from Simplified Chinese to Traditional Chinese
 - Adjustable subtitle position, size, and color
 - Supports fullscreen playback
@@ -46,8 +54,9 @@ Prerequisites: [Node.js](https://nodejs.org/) and npm.
 1. Click the extension icon on a webpage containing a `<video>` element.
 2. Select the video element to which you want to add subtitles.
 3. Upload a subtitle file or enter the subtitle file URL.
-4. Adjust the subtitle settings (optional).
-5. Enjoy your video with subtitles!
+4. Or switch to the **Search** tab to find and load subtitles online (set API keys in **Settings** first for OpenSubtitles/assrt; SubHD needs no key).
+5. Adjust the subtitle settings (optional).
+6. Enjoy your video with subtitles!
 
 ### Videos inside iframes
 
