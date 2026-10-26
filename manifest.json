@@ -1,7 +1,7 @@
 {
     "manifest_version": 3,
     "name": "Add Subtitles",
-    "version": "1.66",
+    "version": "1.67",
     "description": "Add subtitles to a video element.",
     "homepage_url": "https://github.com/tszngaiyip/add-subtitles-extended",
     "icons": {
@@ -17,27 +17,34 @@
         "storage",
         "declarativeNetRequest"
     ],
-    "host_permissions": ["<all_urls>"],
+    "host_permissions": [
+        "<all_urls>"
+    ],
     "background": {
         "service_worker": "background_script.js"
     },
     "content_scripts": [
         {
-            "matches": ["<all_urls>"],
+            "matches": [
+                "<all_urls>"
+            ],
             "all_frames": true,
             "match_about_blank": true,
             "run_at": "document_start",
-            "js": ["content_scripts/context_menu_guard.js"]
+            "js": [
+                "content_scripts/context_menu_guard.js"
+            ]
         }
     ],
     "web_accessible_resources": [
         {
             "resources": [
-                "content_scripts/jszip.min.js",
-                "content_scripts/opencc-cn2t.js",
-                "content_scripts/add_subtitles.js"
+                "content_scripts/add_subtitles.js",
+                "libarchive/*"
             ],
-            "matches": ["<all_urls>"]
+            "matches": [
+                "<all_urls>"
+            ]
         }
     ],
     "action": {
@@ -46,10 +53,11 @@
     },
     "browser_specific_settings": {
         "gecko": {
-            "id": "add-subtitles-extended-ver2@tszngaiyip.github.io"
-            ,
+            "id": "add-subtitles-extended-ver2@tszngaiyip.github.io",
             "data_collection_permissions": {
-                "required": ["none"]
+                "required": [
+                    "none"
+                ]
             }
         }
     }

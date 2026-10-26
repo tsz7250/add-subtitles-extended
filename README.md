@@ -27,29 +27,19 @@ This project is a repaired and enhanced version based on the original add-subtit
 - Supports fullscreen playback
 - Keyboard shortcut controls
 
-## Third-Party Library Notices
-
-This extension uses the following third-party libraries. For complete information, please see [THIRD_PARTY_LIBRARIES.md](THIRD_PARTY_LIBRARIES.md):
-
-### JSZip v3.3.0
-- **Purpose**: Process subtitle files inside ZIP archives
-- **Source**: [Official GitHub repository](https://github.com/Stuk/jszip)
-- **License**: MIT License
-- **Version**: 3.3.0 (stable version)
-
-### OpenCC-JS v1.0.5
-- **Purpose**: Convert Simplified Chinese to Traditional Chinese
-- **Source**: [Official GitHub repository](https://github.com/nk2028/opencc-js)
-- **License**: MIT License
-- **Version**: 1.0.5 (stable version)
-
 ## Installation
 
 1. Install it from the [Firefox Add-ons store](https://addons.mozilla.org/firefox/addon/add-subtitles-extended/) (recommended).
 2. Alternatively, download the `.xpi` file and install it manually.
-3. Run `npm install`, then run `npm run build` to create both browser packages.
-4. In Chrome, open `chrome://extensions`, enable **Developer mode**, select **Load unpacked**, and choose `dist/chrome`.
-5. In Firefox, open `about:debugging#/runtime/this-firefox`, select **Load Temporary Add-on**, and choose `dist/packages/add-subtitles-extended-firefox.zip`.
+
+## Building from Source
+
+Prerequisites: [Node.js](https://nodejs.org/) and npm.
+
+1. Run `npm install`, then run `npm run build` to bundle with webpack and create both browser packages.
+2. In Chrome, open `chrome://extensions`, enable **Developer mode**, select **Load unpacked**, and choose `dist/chrome`.
+3. In Firefox, open `about:debugging#/runtime/this-firefox`, select **Load Temporary Add-on**, and choose `dist/packages/add-subtitles-extended-firefox.zip`.
+4. For development, run `npm run watch` to rebuild on source changes.
 
 ## Usage
 

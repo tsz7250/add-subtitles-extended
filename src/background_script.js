@@ -15,42 +15,7 @@ function executeScript(tabId, options, targetOptions = {}) {
     });
 }
 
-function assignOpenCCGlobal() {
-    console.log('=== Post-ExecuteScript Global Assignment ===');
-    if (typeof window.OpenCC === 'undefined' && typeof globalThis.OpenCC !== 'undefined') {
-        window.OpenCC = globalThis.OpenCC;
-    }
-    if (typeof window.OpenCC === 'undefined' && typeof self.OpenCC !== 'undefined') {
-        window.OpenCC = self.OpenCC;
-    }
-    if (typeof window.OpenCC === 'undefined') {
-        const possibleExports = [window.exports, globalThis.exports, self.exports];
-        for (const exportsObject of possibleExports) {
-            if (exportsObject && exportsObject.Converter) {
-                window.OpenCC = exportsObject;
-                break;
-            }
-        }
-    }
-    return 'global_assignment_completed';
-}
-
-function checkOpenCC() {
-    console.log('=== Final Direct ExecuteScript Check ===');
-    if (typeof window.OpenCC === 'undefined') return 'direct_no_opencc';
-    if (!window.OpenCC.Converter) return 'direct_no_converter';
-    try {
-        const converter = window.OpenCC.Converter({ from: 'cn', to: 'tw' });
-        return converter('直接测试') !== '直接测试' ? 'direct_success' : 'direct_no_conversion';
-    } catch (error) {
-        console.error('Direct test failed:', error);
-        return 'direct_test_failed';
-    }
-}
-
-function setOpenCCLoadResult(result) {
-    window._openccLoadResult = result;
-}
+// Chinese conversion is bundled into add_subtitles.js via npm packages.
 
 const openFrameMenuId = 'open-current-frame';
 
@@ -101,51 +66,11 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 
 // Function to inject all content scripts
 async function injectContentScripts(tabId) {
-    console.log('Starting content script injection for tab:', tabId);
+    console.log('Injecting content scripts for tab:', tabId);
 
     try {
-        console.log('Injecting JSZip...');
-        await executeScript(tabId, { files: ["content_scripts/jszip.min.js"] });
-        console.log('JSZip injected successfully');
-
-        console.log('Method 0: Attempting direct executeScript injection...');
-        try {
-            const directResult = await executeScript(tabId, {
-                files: ["content_scripts/opencc-cn2t.js"]
-            });
-            console.log('Direct executeScript result:', directResult);
-
-            await executeScript(tabId, { func: assignOpenCCGlobal });
-            const checkResult = await executeScript(tabId, { func: checkOpenCC });
-
-            console.log('Direct executeScript check result:', checkResult[0]);
-            if (checkResult[0] === 'direct_success') {
-                await executeScript(tabId, {
-                    func: setOpenCCLoadResult,
-                    args: ['direct_execute_success']
-                });
-                console.log('SUCCESS: Direct executeScript worked');
-            } else {
-                console.log('Direct executeScript did not work, result:', checkResult[0]);
-                await executeScript(tabId, {
-                    func: setOpenCCLoadResult,
-                    args: [checkResult[0]]
-                });
-            }
-        } catch (directError) {
-            console.error('Direct executeScript failed:', directError);
-            await executeScript(tabId, {
-                func: setOpenCCLoadResult,
-                args: ['direct_execute_failed']
-            });
-        }
-
-        console.log('Injecting main add_subtitles script...');
-        await executeScript(tabId, {
-            files: ["content_scripts/add_subtitles.js"]
-        });
-        console.log('Main script injected successfully');
-        console.log('All content scripts injection completed');
+        await executeScript(tabId, { files: ["content_scripts/add_subtitles.js"] });
+        console.log('Content script injection completed');
     } catch (error) {
         console.error('Content script injection failed:', error);
         throw error;
@@ -193,9 +118,12 @@ function binaryToBase64(buffer) {
     return btoa(binary);
 }
 
-// SubHD's /api/sub/prepare-download rejects extension-origin POSTs
-// ("无法准备下载，请返回字幕详情页重试"). Origin is a forbidden header for fetch,
-// so strip it via a declarativeNetRequest session rule scoped to our own requests.
+// SubHD rejects (403 "无法准备下载，请返回字幕详情页重试") requests whose Origin
+// header is an extension origin, AND requests carrying a Sec-Fetch-Site header with
+// any value other than same-origin (Chrome service-worker fetches send "none";
+// Firefox omits Fetch Metadata headers entirely, which passes). Origin is a
+// forbidden header for fetch, so fix both via a declarativeNetRequest session rule
+// scoped to our own requests.
 const SUBHD_DNR_RULE_ID = 990001;
 const SUBHD_DOMAINS = ['subhd.me', 'subhd.tv', 'subhd.one', 'subhdtw.com', 'subhd.top', 'subhd.cc'];
 
@@ -228,19 +156,15 @@ function ensureSubhdOriginStripped() {
     if (!chrome.declarativeNetRequest || !chrome.declarativeNetRequest.updateSessionRules) {
         return Promise.resolve(); // shortcut: old Firefox without DNR, degrade to current (blocked) behavior
     }
+    // [reason] scope to background-initiated requests (no tab, tabId -1): Chrome's
+    // initiatorDomains did NOT match service-worker fetches, leaving Origin intact and
+    // SubHD 403'ing; tabIds [-1] matches them in both engines and still never touches
+    // page-initiated requests
     const condition = {
         requestDomains: SUBHD_DOMAINS,
-        resourceTypes: ['xmlhttprequest', 'other']
+        resourceTypes: ['xmlhttprequest', 'other'],
+        tabIds: [-1]
     };
-    // Chrome extension IDs are 32-char a-p strings (valid DNR "domain"); Firefox IDs are
-    // often @-forms that DNR rejects as initiatorDomains, so scope to them only when valid
-    if (/^[a-p]{32}$/.test(chrome.runtime.id)) {
-        condition.initiatorDomains = [chrome.runtime.id];
-    } else {
-        // [reason] Firefox @-form ids are rejected by initiatorDomains; scope to
-        // background-initiated requests instead (they run without a tab, tabId -1)
-        condition.tabIds = [-1];
-    }
     return chrome.declarativeNetRequest.updateSessionRules({
         removeRuleIds: [SUBHD_DNR_RULE_ID],
         addRules: [{
@@ -248,13 +172,98 @@ function ensureSubhdOriginStripped() {
             priority: 1,
             action: {
                 type: 'modifyHeaders',
-                requestHeaders: [{ header: 'Origin', operation: 'remove' }]
+                requestHeaders: [
+                    { header: 'Origin', operation: 'remove' },
+                    { header: 'Sec-Fetch-Site', operation: 'set', value: 'same-origin' }
+                ]
             },
             condition: condition
         }]
     }).catch(function(error){
         console.warn('DNR rule install failed:', error);
     });
+}
+
+// [reason] Chrome service-worker requests can still trip SubHD's bot checks
+// (extension Origin, Sec-Fetch-Site "none"); a real page context passes, so run the
+// download handshake inside a temporary hidden tab on the detail page and fetch only
+// the final file URL back in the service worker
+function subhdPrepareInPage(){
+    const sid = location.pathname.split('/').pop();
+    const api = function(path, body){
+        return fetch(location.origin + path, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json; charset=utf-8',
+                'X-Requested-With': 'XMLHttpRequest',
+                'Accept': 'application/json'
+            },
+            body: JSON.stringify(body),
+            credentials: 'include'
+        }).then(function(r){ return r.text(); }).then(function(text){
+            try { return JSON.parse(text); } catch (_error) { return null; }
+        });
+    };
+    return api('/api/sub/prepare-download', { sid: sid }).then(function(prep){
+        if (!prep || prep.success !== true || typeof prep.url !== 'string' || prep.url.indexOf('/down/') !== 0) {
+            return { ok: false, error: 'prepare: ' + ((prep && (prep.msg || prep.error)) || 'unknown error') };
+        }
+        // visit the one-time temp page to arm the token (its body is never parsed)
+        const downUrl = prep.url.indexOf('http') === 0 ? prep.url : location.origin + prep.url;
+        return fetch(downUrl, { credentials: 'include' }).then(function(){
+            return api('/api/sub/down', { sid: sid, cap: '' });
+        }).then(function(down){
+            if (!down || down.success !== true || typeof down.url !== 'string' || !down.url) {
+                return { ok: false, error: 'down: ' + ((down && down.msg) || 'unknown error') };
+            }
+            return { ok: true, fileUrl: down.url.indexOf('http') === 0 ? down.url : location.origin + down.url };
+        });
+    }).catch(function(error){
+        return { ok: false, error: error.message };
+    });
+}
+
+function waitForTabComplete(tabId, timeoutMs){
+    return new Promise(function(resolve, reject){
+        let done = false;
+        function finish(fn, arg){
+            if (done) return;
+            done = true;
+            clearTimeout(timer);
+            chrome.tabs.onUpdated.removeListener(listener);
+            fn(arg);
+        }
+        const timer = setTimeout(function(){ finish(reject, new Error('tab load timeout')); }, timeoutMs);
+        function listener(updatedTabId, info){
+            if (updatedTabId === tabId && info.status === 'complete') finish(resolve);
+        }
+        chrome.tabs.onUpdated.addListener(listener);
+        chrome.tabs.get(tabId).then(function(tab){
+            if (tab.status === 'complete') finish(resolve);
+        }).catch(function(error){ finish(reject, error); });
+    });
+}
+
+async function subhdPageDownload(itemUrl){
+    let tabId = null;
+    try {
+        const tab = await chrome.tabs.create({ url: itemUrl, active: false });
+        tabId = tab.id;
+        await waitForTabComplete(tabId, 20000);
+        const injections = await chrome.scripting.executeScript({
+            target: { tabId: tabId },
+            func: subhdPrepareInPage
+        });
+        const result = injections && injections[0] && injections[0].result;
+        if (!result || result.ok !== true || !result.fileUrl) {
+            throw new Error((result && result.error) || 'no result from page script');
+        }
+        return await subtitleFetch({ url: result.fileUrl, credentials: 'include', want: 'file' });
+    } finally {
+        if (tabId !== null) {
+            chrome.tabs.remove(tabId).catch(function(){ /* tab already gone */ });
+        }
+    }
 }
 
 // transient resets (server RST, CF hiccup) surface as NetworkError in Firefox;
@@ -337,6 +346,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 ok: false,
                 error: error.message + ' [' + (message.method || 'GET') + ' ' + (message.url || '?') + ']'
             }));
+        return true;
+    }
+    if (message.action === 'subhd_page_download') {
+        subhdPageDownload(message.item)
+            .then(sendResponse)
+            .catch(error => sendResponse({ ok: false, error: error.message }));
         return true;
     }
 });

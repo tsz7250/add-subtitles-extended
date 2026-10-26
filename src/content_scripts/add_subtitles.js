@@ -1,3 +1,7 @@
+import JSZip from 'jszip';
+import { Archive } from 'libarchive.js';
+import { Converter } from 'opencc-js/cn2t';
+
 (function(){
 
 if(window.has_run){
@@ -35,6 +39,7 @@ class SubtitleError extends Error {
 // Added: File validation class
 class FileValidator {
     static SUPPORTED_FORMATS = ['srt', 'vtt', 'ass', 'ssa'];
+    static ARCHIVE_FORMATS = ['zip', '7z', 'rar'];
     static MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
     
     static validateFile(file) {
@@ -54,9 +59,10 @@ class FileValidator {
         
         // File format check
         const extension = file.name.split('.').pop().toLowerCase();
-        if (!this.SUPPORTED_FORMATS.includes(extension)) {
+        const isArchive = this.ARCHIVE_FORMATS.includes(extension);
+        if (!this.SUPPORTED_FORMATS.includes(extension) && !isArchive) {
             throw new SubtitleError(
-                `Unsupported file format: .${extension}. Supported formats: ${this.SUPPORTED_FORMATS.join(', ')}`,
+                `Unsupported file format: .${extension}. Supported formats: ${this.SUPPORTED_FORMATS.join(', ')}, ${this.ARCHIVE_FORMATS.join(', ')}`,
                 'UNSUPPORTED_FORMAT'
             );
         }
@@ -64,6 +70,7 @@ class FileValidator {
         return {
             isLarge: file.size > LARGE_FILE_THRESHOLD,
             format: extension,
+            isArchive: isArchive,
             size: file.size
         };
     }
@@ -312,7 +319,7 @@ uploadFileLine.appendChild(document.createTextNode("Upload file: "));
 
 const fileInput = document.createElement("input");
 fileInput.type = "file";
-fileInput.accept = ".srt,.vtt,.ass,.ssa";
+fileInput.accept = ".srt,.vtt,.ass,.ssa,.zip,.7z,.rar";
 fileInput.id = "subtitle_file_input";
 fileInput.autocomplete = "off";
 uploadFileLine.appendChild(fileInput);
@@ -322,7 +329,7 @@ subtitle_file_fieldset.appendChild(uploadFileLine);
 // Create second line: URL input
 const urlLine = document.createElement("div");
 urlLine.className = "line";
-urlLine.appendChild(document.createTextNode("Or from URL (zip supported): "));
+urlLine.appendChild(document.createTextNode("Or from URL (zip/7z/rar supported): "));
 
 const urlInput = document.createElement("input");
 urlInput.type = "text";
@@ -733,6 +740,7 @@ input[type="file"] {
     overflow: hidden;
     text-overflow: ellipsis;
     width: 100%;
+    min-width: 0;
     padding: 4px 0;
 }
 
@@ -838,6 +846,8 @@ fieldset {
     border-radius: 6px;
     padding: 8px 12px;
     margin-top: 12px;
+    min-inline-size: 0;
+    min-width: 0;
 }
 
 legend {
@@ -1148,84 +1158,29 @@ class NetworkRetry {
     }
 }
 
-// Chinese conversion system - Local OpenCC-JS solution
+// Chinese conversion system - OpenCC-JS bundled from npm
 class ChineseConverter {
     constructor() {
         this.initialized = false;
         this.openccLoaded = false;
         this.converter = null;
         this.enabled = true;
-        this.initOpenCC();
+        this.setupOpenCC();
     }
-    
-    async initOpenCC() {
-        try {
-            if (typeof window.OpenCC !== 'undefined' && window.OpenCC.Converter) {
-                this.setupOpenCC();
-                return;
-            }
-            await this.waitForOpenCC();
-            this.setupOpenCC();
-        } catch (_error) {
-            this.initialized = true;
-        }
-    }
-    
-    waitForOpenCC() {
-        return new Promise((resolve, reject) => {
-            // If already loaded, return directly
-            if (typeof window.OpenCC !== 'undefined' && window.OpenCC.Converter) {
-                resolve();
-                return;
-            }
-            
-            let attempts = 0;
-            const maxAttempts = 100; // 10 seconds with 100ms intervals (reduced from 15s)
-            
-            // Set check interval
-            const checkInterval = setInterval(() => {
-                attempts++;
-                if (typeof window.OpenCC !== 'undefined' && window.OpenCC.Converter) {
-                    clearInterval(checkInterval);
-                    clearTimeout(timeout);
-                    resolve();
-                } else if (attempts >= maxAttempts) {
-                    clearInterval(checkInterval);
-                    clearTimeout(timeout);
-                    reject(new Error('OpenCC load timeout after ' + (maxAttempts * 100) + 'ms'));
-                }
-            }, 100);
-            
-            // Timeout after 10 seconds
-            const timeout = setTimeout(() => {
-                clearInterval(checkInterval);
-                reject(new Error('OpenCC load timeout'));
-            }, 10000);
-        });
-    }
-    // Manual reload removed in cleanup
-    
+
     setupOpenCC() {
         try {
-            // Check browser compatibility
-            if (!window.OpenCC || typeof window.OpenCC.Converter !== 'function') {
-                throw new Error('OpenCC.Converter is not a function or not available');
-            }
-            
             // Create Simplified to Traditional Chinese converter using correct API
-            this.converter = window.OpenCC.Converter({ from: 'cn', to: 'tw' });
+            this.converter = Converter({ from: 'cn', to: 'tw' });
             // Test the converter
             const testResult = this.converter('测试');
-            
+
             // Check if conversion is working
-            if (testResult !== '测试') {
-                this.openccLoaded = true;
-            } else {
-                this.openccLoaded = false;
-            }
-            
+            this.openccLoaded = testResult !== '测试';
+
             this.initialized = true;
         } catch (error) {
+            this.openccLoaded = false;
             this.initialized = true;
         }
     }
@@ -3092,8 +3047,16 @@ async function handleUrlUpload(url, progressIndicator) {
         
         progressIndicator.updateProgress(50, 'Parsing file type...');
         
-        if(blob.type === "application/zip" || url.toLowerCase().endsWith('.zip')){
+        const lowerUrl = url.toLowerCase().split('?')[0];
+        const urlExt = lowerUrl.split('.').pop();
+        const archiveMimes = ['application/zip', 'application/x-7z-compressed', 'application/vnd.rar', 'application/x-rar-compressed'];
+        const isZip = blob.type === "application/zip" || urlExt === 'zip';
+        const isArchive = isZip || FileValidator.ARCHIVE_FORMATS.includes(urlExt) || archiveMimes.includes(blob.type);
+        
+        if (isZip) {
             await handleZipFile(await blob_to_base64(blob), progressIndicator);
+        } else if (isArchive) {
+            await handleArchiveFile(blob, progressIndicator);
         } else {
             progressIndicator.updateProgress(70, 'Reading subtitle content...');
             const text = await blob.text();
@@ -3126,6 +3089,17 @@ async function handleFileUpload(file, progressIndicator) {
         if (fileInfo.isLarge) {
             progressIndicator.updateProgress(30, 'Processing large file, please wait...');
             isLargeFile = true;
+        }
+        
+        if (fileInfo.isArchive) {
+            progressIndicator.updateProgress(50, 'Extracting files...');
+            if (fileInfo.format === 'zip') {
+                await handleZipFile(await blob_to_base64(file), progressIndicator);
+            } else {
+                await handleArchiveFile(file, progressIndicator);
+            }
+            progressIndicator.updateProgress(100, 'Loading complete!');
+            return;
         }
         
         progressIndicator.updateProgress(50, 'Reading file content...');
@@ -3206,6 +3180,92 @@ async function handleZipFile(base64, progressIndicator) {
     }
 }
 
+// New: Handle RAR/7z archives via libarchive.js (WASM in a worker)
+let archive_initialized = false;
+
+function ensure_archive_ready(){
+    if (archive_initialized) return;
+    const workerUrl = chrome.runtime.getURL('libarchive/worker-bundle.js');
+    const wasmUrl = chrome.runtime.getURL('libarchive/libarchive.wasm');
+    // [reason] content scripts cannot construct workers from extension URLs (cross-origin),
+    // so bootstrap through a blob module worker that imports the extension worker bundle;
+    // the bundle is patched at build time to read the wasm location from __libarchiveWasmUrl
+    const bootstrap = `self.__libarchiveWasmUrl=${JSON.stringify(wasmUrl)};import ${JSON.stringify(workerUrl)};`;
+    Archive.init({
+        getWorker: function(){
+            return new Worker(
+                URL.createObjectURL(new Blob([bootstrap], { type: 'text/javascript' })),
+                { type: 'module' }
+            );
+        }
+    });
+    archive_initialized = true;
+}
+
+function base64_to_blob(base64){
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i);
+    }
+    return new Blob([bytes], { type: 'application/octet-stream' });
+}
+
+function find_subtitle_file_in_tree(node){
+    const supportedExts = ['srt', 'vtt', 'ass', 'ssa'];
+    if (node instanceof File) {
+        const extension = node.name.split('.').pop().toLowerCase();
+        return supportedExts.includes(extension) ? node : null;
+    }
+    for (const key of Object.keys(node)) {
+        const found = find_subtitle_file_in_tree(node[key]);
+        if (found) return found;
+    }
+    return null;
+}
+
+async function handleArchiveFile(blob, progressIndicator) {
+    try {
+        ensure_archive_ready();
+        
+        progressIndicator.updateProgress(40, 'Opening archive...');
+        const archive = await Archive.open(blob);
+        
+        const encrypted = await archive.hasEncryptedData();
+        if (encrypted === true) {
+            throw new SubtitleError(
+                'Encrypted archives are not supported — use an unencrypted archive.',
+                'ENCRYPTED_ARCHIVE'
+            );
+        }
+        
+        progressIndicator.updateProgress(55, 'Extracting files...');
+        const files = await archive.extractFiles();
+        
+        progressIndicator.updateProgress(75, 'Searching for subtitle files...');
+        const subtitle_file = find_subtitle_file_in_tree(files);
+        
+        if (!subtitle_file) {
+            throw new SubtitleError(
+                'No supported subtitle formats found in archive (srt, vtt, ass, ssa)',
+                'NO_SUBTITLE_IN_ARCHIVE'
+            );
+        }
+        
+        progressIndicator.updateProgress(90, 'Parsing subtitles...');
+        const text = await subtitle_file.text();
+        await parse_subtitles(text);
+        
+    } catch (error) {
+        if (error instanceof SubtitleError) throw error;
+        throw new SubtitleError(
+            `Archive processing failed: ${error.message}`,
+            'ARCHIVE_PROCESSING_ERROR',
+            { originalError: error }
+        );
+    }
+}
+
 // New: Improved file reading functionality
 function readFileAsText(file, progressCallback) {
     return new Promise((resolve, reject) => {
@@ -3247,7 +3307,7 @@ function handleUploadError(error, errorElement, retryButton) {
         errorMessage = error.message;
         
         // Some error types can be retried
-        if (['NETWORK_ERROR', 'ZIP_PROCESSING_ERROR', 'FILE_READ_ERROR'].includes(error.type)) {
+        if (['NETWORK_ERROR', 'ZIP_PROCESSING_ERROR', 'ARCHIVE_PROCESSING_ERROR', 'FILE_READ_ERROR'].includes(error.type)) {
             showRetry = true;
         }
     } else {
@@ -3318,27 +3378,13 @@ function updateConverterStatus() {
             statusElement.style.color = "gray";
             return;
         }
-        if (typeof window.OpenCC !== 'undefined' && typeof window.OpenCC.Converter === 'function') {
-            const testConverter = window.OpenCC.Converter({ from: 'cn', to: 'tw' });
-            const testResult = testConverter('测试');
-            if (testResult !== '测试') {
-                statusElement.textContent = "OpenCC Ready";
-                statusElement.style.color = "green";
-                return;
-            }
-            statusElement.textContent = "FAILED: OpenCC Not Converting";
-            statusElement.style.color = "red";
+        if (chineseConverter.openccLoaded && chineseConverter.converter) {
+            statusElement.textContent = "OpenCC Ready";
+            statusElement.style.color = "green";
             return;
         }
-        if (typeof window._openccLoadResult !== 'undefined') {
-            const code = window._openccLoadResult;
-            const ok = (code === 'direct_execute_success' || code === 'direct_success');
-            statusElement.textContent = ok ? "OpenCC Ready" : "OpenCC Load Failed";
-            statusElement.style.color = ok ? "green" : "red";
-        } else {
-            statusElement.textContent = "FAILED: OpenCC Not Available";
-            statusElement.style.color = "red";
-        }
+        statusElement.textContent = "FAILED: OpenCC Not Available";
+        statusElement.style.color = "red";
     } catch (_e) {
         statusElement.textContent = "FAILED: Status Check Error";
         statusElement.style.color = "red";
@@ -3697,10 +3743,6 @@ async function download_assrt(pay){
         }
     }
     if (!fileResp && first && first.url) {
-        const packName = (first.filename || '').toLowerCase();
-        if (/\.rar$|\.7z$/.test(packName)) {
-            throw new SubtitleError('assrt pack is RAR/7z (not supported) and its single-file endpoint refused the download — pick another result or provider.', 'RAR_NOT_SUPPORTED');
-        }
         fileResp = await bg_fetch_file({ url: first.url });
     }
     if (!fileResp || !fileResp.ok) {
@@ -3710,8 +3752,27 @@ async function download_assrt(pay){
 }
 
 async function download_subhd(pay){
-    // [reason] SubHD requires visiting the detail page before prepare-download honors us;
-    // warm up with a credentialed GET so the server session matches a real page load
+    try {
+        return await download_subhd_sw(pay);
+    } catch (error) {
+        // [reason] Chrome's service-worker requests can still trip SubHD's bot checks
+        // (extension Origin, Sec-Fetch-Site "none") even with the DNR header rules;
+        // retry the handshake inside a hidden tab on the real detail page, where the
+        // requests are genuinely same-origin
+        if (error && error.type === 'SUBHD_BLOCKED') {
+            const page = await bg_send_message({ action: 'subhd_page_download', item: pay.item });
+            if (page && page.ok && page.base64) {
+                return { base64: page.base64, mime: page.mime };
+            }
+            throw new SubtitleError('SubHD download blocked: ' + ((page && page.error) || error.message) + ' — try another provider.', 'SUBHD_BLOCKED');
+        }
+        throw error;
+    }
+}
+
+async function download_subhd_sw(pay){
+    // [reason] warm-up GET mirrors a real page visit; harmless even though the server
+    // no longer requires it (bare cookieless POSTs pass)
     const warmup = await bg_fetch_text({ url: pay.item, credentials: 'include' });
     if (!warmup.ok) {
         throw new SubtitleError('SubHD detail page failed (HTTP ' + warmup.status + ')', 'NETWORK_ERROR');
@@ -3793,11 +3854,14 @@ function base64_to_utf8_text(base64){
 
 async function apply_result_file(file, progressIndicator){
     progressIndicator.updateProgress(30, 'Checking file type...');
-    const head = base64_head_bytes(file.base64, 4);
+    const head = base64_head_bytes(file.base64, 6);
     if (head[0] === 0x52 && head[1] === 0x61 && head[2] === 0x72 && head[3] === 0x21) {
-        throw new SubtitleError('RAR archive is not supported — look for a ZIP version or another result.', 'RAR_NOT_SUPPORTED');
-    }
-    if (head[0] === 0x50 && head[1] === 0x4B) {
+        // Rar!
+        await handleArchiveFile(base64_to_blob(file.base64), progressIndicator);
+    } else if (head[0] === 0x37 && head[1] === 0x7A && head[2] === 0xBC && head[3] === 0xAF && head[4] === 0x27 && head[5] === 0x1C) {
+        // 7z: 37 7A BC AF 27 1C
+        await handleArchiveFile(base64_to_blob(file.base64), progressIndicator);
+    } else if (head[0] === 0x50 && head[1] === 0x4B) {
         await handleZipFile(file.base64, progressIndicator);
     } else {
         progressIndicator.updateProgress(70, 'Parsing subtitles...');

@@ -2,26 +2,31 @@ const fs = require('fs');
 const path = require('path');
 
 const rootDir = path.resolve(__dirname, '..');
-const JSZip = require(path.join(rootDir, 'content_scripts', 'jszip.min.js'));
+const buildDir = path.join(rootDir, 'build');
+const JSZip = require('jszip');
 const distDir = path.join(rootDir, 'dist');
 const stagingDir = path.join(distDir, '.staging');
 const packagesDir = path.join(distDir, 'packages');
 
-const commonFiles = [
-    'assets',
+// Bundled artifacts produced by webpack.
+const filesFromBuild = [
     'content_scripts',
     'background_script.js',
+    'libarchive'
+];
+
+const filesFromRoot = [
+    'assets',
     'LICENSE',
-    'README.md',
-    'THIRD_PARTY_LIBRARIES.md'
+    'README.md'
 ];
 
 function removeIfExists(targetPath) {
     fs.rmSync(targetPath, { recursive: true, force: true });
 }
 
-function copyEntry(entryName, destinationDir) {
-    const sourcePath = path.join(rootDir, entryName);
+function copyEntry(entryName, sourceDir, destinationDir) {
+    const sourcePath = path.join(sourceDir, entryName);
     const destinationPath = path.join(destinationDir, entryName);
 
     if (!fs.existsSync(sourcePath)) {
@@ -71,7 +76,8 @@ async function buildPackage(browser) {
 
     removeIfExists(outputDir);
     fs.mkdirSync(outputDir, { recursive: true });
-    commonFiles.forEach((entryName) => copyEntry(entryName, outputDir));
+    filesFromBuild.forEach((entryName) => copyEntry(entryName, buildDir, outputDir));
+    filesFromRoot.forEach((entryName) => copyEntry(entryName, rootDir, outputDir));
     writeManifest(browser, outputDir);
     removeIfExists(archivePath);
     await compressDirectory(outputDir, archivePath);

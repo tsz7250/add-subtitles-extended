@@ -3,3 +3,4 @@ dist/
 /*.zip
 *.xpi
 .env
+build/
