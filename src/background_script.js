@@ -1,4 +1,6 @@
 // [reason] chrome.* with callbacks works in both Chrome and Firefox WebExtensions.
+const subhdWaitForToken = require('./subhd_wait_for_token');
+
 function executeScript(tabId, options, targetOptions = {}) {
     return new Promise((resolve, reject) => {
         chrome.scripting.executeScript({
@@ -8,6 +10,11 @@ function executeScript(tabId, options, targetOptions = {}) {
             const error = chrome.runtime.lastError;
             if (error) {
                 reject(new Error(error.message));
+                return;
+            }
+            const failed = results.find(result => result.error);
+            if (failed) {
+                reject(new Error(failed.error.message || String(failed.error)));
                 return;
             }
             resolve(results.map(result => result.result));
@@ -184,45 +191,6 @@ function ensureSubhdOriginStripped() {
     });
 }
 
-// [reason] Chrome service-worker requests can still trip SubHD's bot checks
-// (extension Origin, Sec-Fetch-Site "none"); a real page context passes, so run the
-// download handshake inside a temporary hidden tab on the detail page and fetch only
-// the final file URL back in the service worker
-function subhdPrepareInPage(){
-    const sid = location.pathname.split('/').pop();
-    const api = function(path, body){
-        return fetch(location.origin + path, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json; charset=utf-8',
-                'X-Requested-With': 'XMLHttpRequest',
-                'Accept': 'application/json'
-            },
-            body: JSON.stringify(body),
-            credentials: 'include'
-        }).then(function(r){ return r.text(); }).then(function(text){
-            try { return JSON.parse(text); } catch (_error) { return null; }
-        });
-    };
-    return api('/api/sub/prepare-download', { sid: sid }).then(function(prep){
-        if (!prep || prep.success !== true || typeof prep.url !== 'string' || prep.url.indexOf('/down/') !== 0) {
-            return { ok: false, error: 'prepare: ' + ((prep && (prep.msg || prep.error)) || 'unknown error') };
-        }
-        // visit the one-time temp page to arm the token (its body is never parsed)
-        const downUrl = prep.url.indexOf('http') === 0 ? prep.url : location.origin + prep.url;
-        return fetch(downUrl, { credentials: 'include' }).then(function(){
-            return api('/api/sub/down', { sid: sid, cap: '' });
-        }).then(function(down){
-            if (!down || down.success !== true || typeof down.url !== 'string' || !down.url) {
-                return { ok: false, error: 'down: ' + ((down && down.msg) || 'unknown error') };
-            }
-            return { ok: true, fileUrl: down.url.indexOf('http') === 0 ? down.url : location.origin + down.url };
-        });
-    }).catch(function(error){
-        return { ok: false, error: error.message };
-    });
-}
-
 function waitForTabComplete(tabId, timeoutMs){
     return new Promise(function(resolve, reject){
         let done = false;
@@ -231,34 +199,100 @@ function waitForTabComplete(tabId, timeoutMs){
             done = true;
             clearTimeout(timer);
             chrome.tabs.onUpdated.removeListener(listener);
+            chrome.tabs.onRemoved.removeListener(removedListener);
             fn(arg);
         }
         const timer = setTimeout(function(){ finish(reject, new Error('tab load timeout')); }, timeoutMs);
         function listener(updatedTabId, info){
             if (updatedTabId === tabId && info.status === 'complete') finish(resolve);
         }
+        function removedListener(removedTabId){
+            if (removedTabId === tabId) finish(reject, new Error('download tab was closed'));
+        }
         chrome.tabs.onUpdated.addListener(listener);
+        chrome.tabs.onRemoved.addListener(removedListener);
         chrome.tabs.get(tabId).then(function(tab){
             if (tab.status === 'complete') finish(resolve);
         }).catch(function(error){ finish(reject, error); });
     });
 }
 
+// [reason] the Turnstile token can only be minted in a real page on /down/<sid>;
+// prepare-download still works from the service worker (DNR rules strip Origin /
+// Sec-Fetch-Site), so token creation runs inside a temporary background tab
 async function subhdPageDownload(itemUrl){
+    const sid = (itemUrl || '').split('/').pop();
+    const origin = new URL(itemUrl).origin;
+    const prep = await subtitleFetch({
+        url: origin + '/api/sub/prepare-download',
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json; charset=utf-8',
+            'X-Requested-With': 'XMLHttpRequest',
+            'Accept': 'application/json'
+        },
+        body: JSON.stringify({ sid: sid }),
+        credentials: 'include',
+        want: 'text'
+    });
+    let prepJson = null;
+    if (prep.ok) {
+        try { prepJson = JSON.parse(prep.text); } catch (_error) { prepJson = null; }
+    }
+    if (!prepJson || prepJson.success !== true || typeof prepJson.url !== 'string' || prepJson.url.indexOf('/down/') !== 0) {
+        throw new Error('prepare: ' + ((prepJson && prepJson.msg) || ('HTTP ' + prep.status)));
+    }
+    const downUrl = origin + prepJson.url;
     let tabId = null;
     try {
-        const tab = await chrome.tabs.create({ url: itemUrl, active: false });
+        const tab = await chrome.tabs.create({ url: downUrl, active: false });
         tabId = tab.id;
         await waitForTabComplete(tabId, 20000);
-        const injections = await chrome.scripting.executeScript({
-            target: { tabId: tabId },
-            func: subhdPrepareInPage
-        });
-        const result = injections && injections[0] && injections[0].result;
-        if (!result || result.ok !== true || !result.fileUrl) {
-            throw new Error((result && result.error) || 'no result from page script');
+        let token = '';
+        for (let attempt = 0; attempt < 2; attempt++) {
+            if (attempt > 0) {
+                // [reason] Turnstile may decide to show an interactive challenge in a
+                // background tab; make the tab visible once so the user can pass it
+                await chrome.tabs.update(tabId, { active: true }).catch(function(){});
+            }
+            const results = await executeScript(tabId, {
+                func: subhdWaitForToken,
+                args: [attempt === 0 ? 15000 : 90000]
+            });
+            const result = results && results[0];
+            if (result && result.ok === true && result.token) {
+                token = result.token;
+                break;
+            }
+            if (!result || !result.challengeReady) {
+                throw new Error((result && result.error) || 'no result from page script');
+            }
         }
-        return await subtitleFetch({ url: result.fileUrl, credentials: 'include', want: 'file' });
+        if (!token) {
+            throw new Error('turnstile: token timeout');
+        }
+        const api = await subtitleFetch({
+            url: origin + '/api/sub/down',
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ sid: sid, turnstileToken: token }),
+            credentials: 'include',
+            want: 'text'
+        });
+        let down = null;
+        try { down = JSON.parse(api.text); } catch (_error) { down = null; }
+        if (down && down.dailyLimitReached) {
+            throw new Error('down: ' + (down.msg || 'daily download limit reached'));
+        }
+        if (!api.ok || !down || down.success !== true || down.pass !== true || typeof down.url !== 'string' || !down.url) {
+            throw new Error('down: ' + ((down && down.msg) || ('HTTP ' + api.status)));
+        }
+        const fileUrl = down.url.indexOf('http') === 0 ? down.url : origin + down.url;
+        const file = await subtitleFetch({ url: fileUrl, credentials: 'include', want: 'file' });
+        if (!file.ok || !file.base64) {
+            throw new Error('file: ' + (file.error || ('HTTP ' + file.status)));
+        }
+        return file;
     } finally {
         if (tabId !== null) {
             chrome.tabs.remove(tabId).catch(function(){ /* tab already gone */ });

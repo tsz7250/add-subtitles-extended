@@ -6,6 +6,7 @@
   "scripts": {
     "pack": "node scripts/pack.js",
     "build": "webpack && node scripts/pack.js",
+    "test": "node --test",
     "watch": "webpack --watch"
   },
   "devDependencies": {

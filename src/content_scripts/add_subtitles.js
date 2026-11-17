@@ -3752,73 +3752,14 @@ async function download_assrt(pay){
 }
 
 async function download_subhd(pay){
-    try {
-        return await download_subhd_sw(pay);
-    } catch (error) {
-        // [reason] Chrome's service-worker requests can still trip SubHD's bot checks
-        // (extension Origin, Sec-Fetch-Site "none") even with the DNR header rules;
-        // retry the handshake inside a hidden tab on the real detail page, where the
-        // requests are genuinely same-origin
-        if (error && error.type === 'SUBHD_BLOCKED') {
-            const page = await bg_send_message({ action: 'subhd_page_download', item: pay.item });
-            if (page && page.ok && page.base64) {
-                return { base64: page.base64, mime: page.mime };
-            }
-            throw new SubtitleError('SubHD download blocked: ' + ((page && page.error) || error.message) + ' — try another provider.', 'SUBHD_BLOCKED');
-        }
-        throw error;
+    // [reason] /api/sub/down requires a Cloudflare Turnstile token minted on SubHD's
+    // real /down/<sid> page; the whole handshake therefore runs in a background tab
+    // (see subhdPageDownload in background_script.js)
+    const page = await bg_send_message({ action: 'subhd_page_download', item: pay.item });
+    if (page && page.ok && page.base64) {
+        return { base64: page.base64, mime: page.mime };
     }
-}
-
-async function download_subhd_sw(pay){
-    // [reason] warm-up GET mirrors a real page visit; harmless even though the server
-    // no longer requires it (bare cookieless POSTs pass)
-    const warmup = await bg_fetch_text({ url: pay.item, credentials: 'include' });
-    if (!warmup.ok) {
-        throw new SubtitleError('SubHD detail page failed (HTTP ' + warmup.status + ')', 'NETWORK_ERROR');
-    }
-    const resp = await bg_fetch_text({
-        url: SUBHD_BASE + '/api/sub/prepare-download',
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json; charset=utf-8',
-            'X-Requested-With': 'XMLHttpRequest',
-            'Accept': 'application/json'
-        },
-        body: JSON.stringify({ sid: pay.id }),
-        credentials: 'include'
-    });
-    const json = parse_json_or_throw(resp.text, 'SubHD');
-    if (!json || json.success !== true || typeof json.url !== 'string' || json.url.indexOf('/down/') !== 0) {
-        const reason = (json && (json.msg || json.error)) || 'unknown error';
-        throw new SubtitleError('SubHD download blocked: ' + reason + ' — try another provider.', 'SUBHD_BLOCKED');
-    }
-    // visit the one-time temp page to arm the token (its body is never parsed)
-    const downUrl = json.url.indexOf('http') === 0 ? json.url : SUBHD_BASE + json.url;
-    await bg_fetch_text({ url: downUrl, credentials: 'include' });
-    // exchange the armed token for the real file URL
-    const api = await bg_fetch_text({
-        url: SUBHD_BASE + '/api/sub/down',
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json; charset=utf-8',
-            'X-Requested-With': 'XMLHttpRequest',
-            'Accept': 'application/json'
-        },
-        body: JSON.stringify({ sid: pay.id, cap: '' }),
-        credentials: 'include'
-    });
-    const data = parse_json_or_throw(api.text, 'SubHD');
-    if (!data || data.success !== true || typeof data.url !== 'string' || !data.url) {
-        const reason = (data && data.msg) || 'unknown error';
-        throw new SubtitleError('SubHD download failed: ' + reason + ' — try again later or use another provider.', 'SUBHD_BLOCKED');
-    }
-    const fileUrl = data.url.indexOf('http') === 0 ? data.url : SUBHD_BASE + data.url;
-    const fileResp = await bg_fetch_file({ url: fileUrl, credentials: 'include' });
-    if (!fileResp.ok) {
-        throw new SubtitleError('SubHD file download failed (HTTP ' + fileResp.status + ')', 'NETWORK_ERROR');
-    }
-    return { base64: fileResp.base64, mime: fileResp.mime };
+    throw new SubtitleError('SubHD download failed: ' + ((page && page.error) || 'no response') + ' — try another provider.', 'SUBHD_BLOCKED');
 }
 
 function download_result(pay){
