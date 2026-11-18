@@ -1,5 +1,6 @@
 // [reason] chrome.* with callbacks works in both Chrome and Firefox WebExtensions.
 const subhdWaitForToken = require('./subhd_wait_for_token');
+const { SUBHD_HOSTS, subhdDnrRegexFilter } = require('./subhd_config');
 
 function executeScript(tabId, options, targetOptions = {}) {
     return new Promise((resolve, reject) => {
@@ -88,6 +89,7 @@ async function injectContentScripts(tabId) {
 chrome.action.onClicked.addListener(async function(tab) {
     console.log('Button clicked for tab:', tab.id);
     console.log('Tab URL:', tab.url);
+    await ensureFetchPermissions();
     await injectContentScripts(tab.id);
 });
 
@@ -132,12 +134,29 @@ function binaryToBase64(buffer) {
 // forbidden header for fetch, so fix both via a declarativeNetRequest session rule
 // scoped to our own requests.
 const SUBHD_DNR_RULE_ID = 990001;
-const SUBHD_DOMAINS = ['subhd.me', 'subhd.tv', 'subhd.one', 'subhdtw.com', 'subhd.top', 'subhd.cc'];
+
+// [reason] Firefox MV3 treats declared host_permissions as opt-in; without the grant
+// background fetches hit CORS (status 200 but response unreadable). The action button
+// click is a user gesture, so we ask for the API origins there.
+const FETCH_ORIGINS = SUBHD_HOSTS.map(function(d){ return '*://*.' + d + '/*'; })
+    .concat(['*://api.assrt.net/*', '*://api.opensubtitles.com/*']);
+
+function ensureFetchPermissions() {
+    return new Promise(function(resolve){
+        chrome.permissions.contains({ origins: FETCH_ORIGINS }, function(has){
+            if (has || chrome.runtime.lastError) {
+                resolve();
+                return;
+            }
+            chrome.permissions.request({ origins: FETCH_ORIGINS }, function(){ resolve(); });
+        });
+    });
+}
 
 function isSubhdUrl(url) {
     try {
         const host = new URL(url).hostname;
-        return SUBHD_DOMAINS.some(function(d){ return host === d || host.endsWith('.' + d); });
+        return SUBHD_HOSTS.some(function(d){ return host === d || host.endsWith('.' + d); });
     } catch (_error) {
         return false;
     }
@@ -166,9 +185,10 @@ function ensureSubhdOriginStripped() {
     // [reason] scope to background-initiated requests (no tab, tabId -1): Chrome's
     // initiatorDomains did NOT match service-worker fetches, leaving Origin intact and
     // SubHD 403'ing; tabIds [-1] matches them in both engines and still never touches
-    // page-initiated requests
+    // page-initiated requests. regexFilter limits it to the download API paths — the
+    // only requests that ever needed this fix; plain GETs (search) go out untouched.
     const condition = {
-        requestDomains: SUBHD_DOMAINS,
+        regexFilter: subhdDnrRegexFilter(),
         resourceTypes: ['xmlhttprequest', 'other'],
         tabIds: [-1]
     };
@@ -217,75 +237,110 @@ function waitForTabComplete(tabId, timeoutMs){
     });
 }
 
+// [reason] injected into the /down/ tab, so it must be self-contained (no outer refs)
+async function subhdDownRequest(subtitleId, turnstileToken){
+    const response = await fetch('/api/sub/down', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sid: subtitleId, turnstileToken: turnstileToken }),
+        credentials: 'include'
+    });
+    let json = null;
+    try { json = await response.json(); } catch (_error) {}
+    return { status: response.status, json: json };
+}
+
 // [reason] the Turnstile token can only be minted in a real page on /down/<sid>;
 // prepare-download still works from the service worker (DNR rules strip Origin /
 // Sec-Fetch-Site), so token creation runs inside a temporary background tab
 async function subhdPageDownload(itemUrl){
     const sid = (itemUrl || '').split('/').pop();
     const origin = new URL(itemUrl).origin;
-    const prep = await subtitleFetch({
-        url: origin + '/api/sub/prepare-download',
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json; charset=utf-8',
-            'X-Requested-With': 'XMLHttpRequest',
-            'Accept': 'application/json'
-        },
-        body: JSON.stringify({ sid: sid }),
-        credentials: 'include',
-        want: 'text'
-    });
-    let prepJson = null;
-    if (prep.ok) {
-        try { prepJson = JSON.parse(prep.text); } catch (_error) { prepJson = null; }
-    }
-    if (!prepJson || prepJson.success !== true || typeof prepJson.url !== 'string' || prepJson.url.indexOf('/down/') !== 0) {
-        throw new Error('prepare: ' + ((prepJson && prepJson.msg) || ('HTTP ' + prep.status)));
-    }
-    const downUrl = origin + prepJson.url;
     let tabId = null;
     try {
-        const tab = await chrome.tabs.create({ url: downUrl, active: false });
+        const tab = await chrome.tabs.create({ url: itemUrl, active: false });
         tabId = tab.id;
         await waitForTabComplete(tabId, 20000);
-        let token = '';
-        for (let attempt = 0; attempt < 2; attempt++) {
-            if (attempt > 0) {
-                // [reason] Turnstile may decide to show an interactive challenge in a
-                // background tab; make the tab visible once so the user can pass it
-                await chrome.tabs.update(tabId, { active: true }).catch(function(){});
-            }
-            const results = await executeScript(tabId, {
-                func: subhdWaitForToken,
-                args: [attempt === 0 ? 15000 : 90000]
-            });
-            const result = results && results[0];
-            if (result && result.ok === true && result.token) {
-                token = result.token;
-                break;
-            }
-            if (!result || !result.challengeReady) {
-                throw new Error((result && result.error) || 'no result from page script');
-            }
-        }
-        if (!token) {
-            throw new Error('turnstile: token timeout');
-        }
-        const api = await subtitleFetch({
-            url: origin + '/api/sub/down',
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ sid: sid, turnstileToken: token }),
-            credentials: 'include',
-            want: 'text'
+        // [reason] Firefox partitions extension and first-party cookies. Prepare inside
+        // the detail page so the temporary /down/ state belongs to the tab that uses it.
+        const prepResults = await executeScript(tabId, {
+            func: async function(subtitleId){
+                const response = await fetch('/api/sub/prepare-download', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json; charset=utf-8',
+                        'X-Requested-With': 'XMLHttpRequest',
+                        'Accept': 'application/json'
+                    },
+                    body: JSON.stringify({ sid: subtitleId }),
+                    credentials: 'include'
+                });
+                let json = null;
+                try { json = await response.json(); } catch (_error) {}
+                return { status: response.status, json: json };
+            },
+            args: [sid]
         });
-        let down = null;
-        try { down = JSON.parse(api.text); } catch (_error) { down = null; }
+        const prep = prepResults && prepResults[0];
+        const prepJson = prep && prep.json;
+        if (!prepJson || prepJson.success !== true || typeof prepJson.url !== 'string' || prepJson.url.indexOf('/down/') !== 0) {
+            throw new Error('prepare: ' + ((prepJson && prepJson.msg) || ('HTTP ' + ((prep && prep.status) || '?'))));
+        }
+        await chrome.tabs.update(tabId, { url: origin + prepJson.url });
+        await waitForTabComplete(tabId, 20000);
+        // [reason] SubHD does not render Turnstile until the first tokenless down
+        // request says it is required. Probe first so no-challenge downloads skip it.
+        let downResults = await executeScript(tabId, {
+            func: subhdDownRequest,
+            args: [sid, '']
+        });
+        let api = downResults && downResults[0];
+        let down = api && api.json;
+        if (down && down.turnstileRequired) {
+            // Run the site's click handler; it reveals the box and renders Turnstile.
+            const clicked = await executeScript(tabId, {
+                func: function(){
+                    const button = document.querySelector('.download-submit, .down');
+                    if (!button) return false;
+                    button.click();
+                    return true;
+                }
+            });
+            if (!clicked || clicked[0] !== true) {
+                throw new Error('turnstile: download button not found');
+            }
+            let token = '';
+            for (let attempt = 0; attempt < 2; attempt++) {
+                if (attempt > 0) {
+                    // [reason] Turnstile may require an interactive challenge.
+                    await chrome.tabs.update(tabId, { active: true }).catch(function(){});
+                }
+                const results = await executeScript(tabId, {
+                    func: subhdWaitForToken,
+                    args: [attempt === 0 ? 15000 : 90000]
+                });
+                const result = results && results[0];
+                if (result && result.ok === true && result.token) {
+                    token = result.token;
+                    break;
+                }
+                if (!result || !result.challengeReady) {
+                    throw new Error((result && result.error) || 'no result from page script');
+                }
+            }
+            if (!token) throw new Error('turnstile: token timeout');
+            downResults = await executeScript(tabId, {
+                func: subhdDownRequest,
+                args: [sid, token]
+            });
+            api = downResults && downResults[0];
+            down = api && api.json;
+        }
         if (down && down.dailyLimitReached) {
             throw new Error('down: ' + (down.msg || 'daily download limit reached'));
         }
-        if (!api.ok || !down || down.success !== true || down.pass !== true || typeof down.url !== 'string' || !down.url) {
-            throw new Error('down: ' + ((down && down.msg) || ('HTTP ' + api.status)));
+        if (!down || down.success !== true || down.pass !== true || typeof down.url !== 'string' || !down.url) {
+            throw new Error('down: ' + ((down && down.msg) || ('HTTP ' + ((api && api.status) || '?'))));
         }
         const fileUrl = down.url.indexOf('http') === 0 ? down.url : origin + down.url;
         const file = await subtitleFetch({ url: fileUrl, credentials: 'include', want: 'file' });

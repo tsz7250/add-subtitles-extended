@@ -19,6 +19,13 @@ function subhdWaitForToken(timeoutMs) {
     if (initialState.token) {
         return Promise.resolve({ ok: true, token: initialState.token });
     }
+    if (document.querySelector('.download-expired-page')) {
+        return Promise.resolve({
+            ok: false,
+            challengeReady: false,
+            error: 'turnstile: download page expired'
+        });
+    }
 
     return new Promise(function(resolve) {
         let done = false;

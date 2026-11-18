@@ -6,8 +6,13 @@ const {
     determineSubtitleRenderer,
     getCueTimes,
     findReplacementVideo,
-    getCueSyncError
+    getCueSyncError,
+    groupByEpisode,
+    getDownloadCacheKey,
+    hasUsableSubtitleFormat,
+    SUBTITLE_FORMATS
 } = require('../subtitle_logic');
+const { SUBHD_MIRRORS } = require('../subhd_config');
 
 (function(){
 
@@ -45,7 +50,7 @@ class SubtitleError extends Error {
 
 // Added: File validation class
 class FileValidator {
-    static SUPPORTED_FORMATS = ['srt', 'vtt', 'ass', 'ssa'];
+    static SUPPORTED_FORMATS = SUBTITLE_FORMATS;
     static ARCHIVE_FORMATS = ['zip', '7z', 'rar'];
     static MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
     
@@ -859,6 +864,46 @@ input[type="checkbox"] {
     background-color: #eee;
 }
 
+/* sits inside .loading-progress, which already supplies padding and border */
+.subtitle-chooser {
+    margin-top: 0;
+}
+
+.subtitle-chooser-title {
+    font-size: 12px;
+    color: #333;
+    margin-bottom: 8px;
+    font-weight: bold;
+}
+
+.subtitle-chooser-list {
+    max-height: 200px;
+    overflow-y: auto;
+}
+
+.subtitle-chooser-row {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    margin-top: 4px;
+    padding: 6px 8px;
+    cursor: pointer;
+    background-color: #f9f9f9;
+    transition: background-color 0.2s;
+}
+
+.subtitle-chooser-row:hover {
+    background-color: #eee;
+}
+
+.subtitle-chooser-actions {
+    margin-top: 10px;
+    display: flex;
+    gap: 8px;
+}
+
 #video_elements_list .selected_video_list {
     background-color: #e8f5e9;
     border: 1px solid #4CAF50;
@@ -1028,10 +1073,21 @@ legend {
 }
 
 .result_title_line {
-    display: block;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.result_title_text {
+    flex: 1 1 auto;
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+.result_cached_icon {
+    flex: 0 0 auto;
 }
 
 .result_meta {
@@ -2251,6 +2307,109 @@ async function handleFileUpload(file, progressIndicator) {
     }
 }
 
+// ===== Archive subtitle chooser (episode list -> version list) =====
+// [reason] SubHD packs are multi-episode/multi-language; auto-picking the first
+// subtitle loads the wrong one. Two-step picker: episodes then variants.
+
+// [reason] the chooser lives inside the progress box so it reuses that spot;
+// the progress bar is hidden while choosing and comes back during extraction/parsing
+function build_chooser(progress, onPick, onCancel){
+    const container = document.createElement('div');
+    container.className = 'subtitle-chooser';
+    progress.progressElement.appendChild(container);
+    const bar = progress.progressElement.querySelector('.loading-bar');
+    const message = progress.progressElement.querySelector('.loading-message');
+
+    const header = document.createElement('div');
+    header.className = 'subtitle-chooser-title';
+    container.appendChild(header);
+    const list = document.createElement('div');
+    list.className = 'subtitle-chooser-list';
+    container.appendChild(list);
+    const footer = document.createElement('div');
+    footer.className = 'subtitle-chooser-actions';
+    const backBtn = document.createElement('button');
+    backBtn.textContent = 'Back';
+    backBtn.style.display = 'none';
+    backBtn.addEventListener('click', function(){ showEpisodes(); });
+    footer.appendChild(backBtn);
+    const cancelBtn = document.createElement('button');
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.addEventListener('click', function(){
+        container.remove();
+        set_picker_mode(false);
+        onCancel();
+    });
+    footer.appendChild(cancelBtn);
+    container.appendChild(footer);
+
+    let groups = [];
+
+    function set_picker_mode(picking){
+        container.style.display = picking ? '' : 'none';
+        if (bar) bar.style.display = picking ? 'none' : '';
+        if (message) message.style.display = picking ? 'none' : '';
+    }
+
+    function showEpisodes(){
+        backBtn.style.display = 'none';
+        header.textContent = 'This archive has multiple episodes — pick one:';
+        list.textContent = '';
+        groups.forEach(function(g){
+            const row = document.createElement('div');
+            row.className = 'subtitle-chooser-row';
+            row.textContent = g.label;
+            row.title = g.items.map(function(it){ return it.path; }).join('\n');
+            row.addEventListener('click', function(){ pickEpisode(g); });
+            list.appendChild(row);
+        });
+    }
+
+    function showVersions(g){
+        backBtn.style.display = groups.length > 1 ? '' : 'none';
+        header.textContent = groups.length > 1
+            ? 'Episode ' + g.label + ' — pick a version:'
+            : 'Multiple versions found — pick one:';
+        list.textContent = '';
+        g.items.forEach(function(it){
+            const row = document.createElement('div');
+            row.className = 'subtitle-chooser-row';
+            row.textContent = it.short + '  ·  ' + it.ext.toUpperCase();
+            row.title = it.path;
+            row.addEventListener('click', function(){ onPick(it); });
+            list.appendChild(row);
+        });
+    }
+
+    function pickEpisode(g){
+        if (g.items.length === 1) {
+            onPick(g.items[0]);
+            return;
+        }
+        showVersions(g);
+    }
+
+    return {
+        show: function(candidates){
+            // candidates: [{ path, ext, getText }]
+            groups = groupByEpisode(candidates);
+            set_picker_mode(true);
+            if (groups.length === 1) {
+                // one episode (or only 其他): skip straight to the version list
+                pickEpisode(groups[0]);
+                return;
+            }
+            showEpisodes();
+        },
+        setBusy: function(){ set_picker_mode(false); },
+        // parsing failed: bring the same list back so the user can pick another
+        resume: function(error){
+            set_picker_mode(true);
+            header.textContent = (error && error.message ? error.message : 'Load failed') + ' — pick another or cancel:';
+        }
+    };
+}
+
 // New: Handle ZIP files
 function blob_to_base64(blob){
     return blob.arrayBuffer().then(function(buffer){
@@ -2272,44 +2431,67 @@ async function handleZipFile(base64, progressIndicator) {
         // [reason] hand jszip the base64 string and let it decode itself — its type check
         // uses instanceof and rejects cross-realm ArrayBuffers from Blob.arrayBuffer
         const zipContent = await zip.loadAsync(base64, { base64: true });
-        
+
         progressIndicator.updateProgress(50, 'Searching for subtitle files...');
-        
+
         const files = Object.entries(zipContent.files);
-        let subtitle_file = null;
-        
-        // Support more formats
-        const supportedExts = ['srt', 'vtt', 'ass', 'ssa'];
-        
-        for(const [filename, file] of files){
-            if(file.dir) continue; // Skip folders
-            
+        const candidates = [];
+        for (const [filename, file] of files) {
+            if (file.dir) continue;
             const extension = filename.split(".").pop().toLowerCase();
-            if(supportedExts.includes(extension)){
-                subtitle_file = file;
-                break;
+            if (SUBTITLE_FORMATS.includes(extension)) {
+                candidates.push({
+                    path: filename,
+                    ext: extension,
+                    getText: function(){ return file.async("string"); }
+                });
             }
         }
-        
-        if(!subtitle_file){
+
+        if (!candidates.length) {
             throw new SubtitleError(
-                `No supported subtitle formats found in ZIP file (${supportedExts.join(', ')})`,
+                `No supported subtitle formats found in ZIP file (${SUBTITLE_FORMATS.join(', ')}; SUP is not supported)`,
                 'NO_SUBTITLE_IN_ZIP'
             );
         }
-        
-        progressIndicator.updateProgress(70, `Extracting ${subtitle_file.name}...`);
-        const text = await subtitle_file.async("string");
-        
-        progressIndicator.updateProgress(90, 'Parsing subtitles...');
-        await parse_subtitles(text);
-        
+
+        await load_archive_candidate(candidates, progressIndicator);
     } catch (error) {
         throw new SubtitleError(
             `ZIP file processing failed: ${error.message}`,
             'ZIP_PROCESSING_ERROR',
             { originalError: error }
         );
+    }
+}
+
+// Shared by zip/7z/rar handlers: one candidate -> load directly; many -> chooser
+function load_archive_candidate(candidates, progressIndicator){
+    return new Promise(function(resolve, reject){
+        if (candidates.length === 1) {
+            load_one(candidates[0]).then(resolve, reject);
+            return;
+        }
+        const chooser = build_chooser(
+            progressIndicator,
+            function(item){
+                chooser.setBusy();
+                load_one(item).then(resolve, function(error){
+                    // keep the chooser open so the user can pick another file
+                    console.error('Subtitle load failed:', error);
+                    chooser.resume(error);
+                });
+            },
+            function(){ reject(new SubtitleError('Cancelled — no subtitle loaded.', 'SUBTITLE_CHOICE_CANCELLED')); }
+        );
+        chooser.show(candidates);
+    });
+
+    async function load_one(item){
+        progressIndicator.updateProgress(70, 'Reading ' + item.path + '...');
+        const text = await item.getText();
+        progressIndicator.updateProgress(90, 'Parsing subtitles...');
+        await parse_subtitles(text);
     }
 }
 
@@ -2344,17 +2526,21 @@ function base64_to_blob(base64){
     return new Blob([bytes], { type: 'application/octet-stream' });
 }
 
-function find_subtitle_file_in_tree(node){
-    const supportedExts = ['srt', 'vtt', 'ass', 'ssa'];
+function collect_subtitle_files_in_tree(node, prefix, out){
     if (node instanceof File) {
         const extension = node.name.split('.').pop().toLowerCase();
-        return supportedExts.includes(extension) ? node : null;
+        if (SUBTITLE_FORMATS.includes(extension)) {
+            out.push({
+                path: prefix ? prefix + '/' + node.name : node.name,
+                ext: extension,
+                getText: function(){ return node.text(); }
+            });
+        }
+        return;
     }
     for (const key of Object.keys(node)) {
-        const found = find_subtitle_file_in_tree(node[key]);
-        if (found) return found;
+        collect_subtitle_files_in_tree(node[key], prefix ? prefix + '/' + key : key, out);
     }
-    return null;
 }
 
 async function handleArchiveFile(blob, progressIndicator) {
@@ -2376,19 +2562,18 @@ async function handleArchiveFile(blob, progressIndicator) {
         const files = await archive.extractFiles();
         
         progressIndicator.updateProgress(75, 'Searching for subtitle files...');
-        const subtitle_file = find_subtitle_file_in_tree(files);
-        
-        if (!subtitle_file) {
+        const candidates = [];
+        collect_subtitle_files_in_tree(files, '', candidates);
+
+        if (!candidates.length) {
             throw new SubtitleError(
-                'No supported subtitle formats found in archive (srt, vtt, ass, ssa)',
+                `No supported subtitle formats found in archive (${SUBTITLE_FORMATS.join(', ')}; SUP is not supported)`,
                 'NO_SUBTITLE_IN_ARCHIVE'
             );
         }
-        
-        progressIndicator.updateProgress(90, 'Parsing subtitles...');
-        const text = await subtitle_file.text();
-        await parse_subtitles(text);
-        
+
+        await load_archive_candidate(candidates, progressIndicator);
+
     } catch (error) {
         if (error instanceof SubtitleError) throw error;
         throw new SubtitleError(
@@ -2573,14 +2758,16 @@ document.addEventListener("fullscreenchange", function(){
 
 // ======= Online subtitle search logic =======
 
-// shortcut: subhd mirrors drift and get region-blocked (tv/com flagged "possibly walled"); update this when the site moves
-const SUBHD_BASE = "https://subhd.me";
+// mirror list lives in subhd_config.js so background permissions/DNR stay in sync
+let subhdBaseCache = null;
 const ASSRT_BASE = "https://api.assrt.net";
 const OS_API_BASE = "https://api.opensubtitles.com";
 const OS_LANG_CODES = { 'zh-hans':'zh-cn', 'zh-hant':'zh-tw' };
 
 let search_results_cache = [];
 let search_result_loading = false;
+// last successfully downloaded archive/file; page-lifetime only, one entry
+let last_download_cache = null;
 
 function clean_page_title(raw){
     if (!raw) return '';
@@ -2762,11 +2949,36 @@ async function search_assrt(query, language){
     }).filter(Boolean).slice(0, 30);
 }
 
-async function search_subhd(query, language){
-    const resp = await bg_fetch_text({ url: SUBHD_BASE + '/search/' + encodeURIComponent(query) });
-    if (!resp.ok) {
-        throw new SubtitleError('SubHD search failed (HTTP ' + resp.status + ')', 'NETWORK_ERROR');
+// [reason] mirrors get walled/blocked independently; try each until one answers, remember the winner for this session
+async function subhd_fetch_text(path){
+    const candidates = subhdBaseCache ? [subhdBaseCache] : [];
+    for (const m of SUBHD_MIRRORS) {
+        if (m !== subhdBaseCache) candidates.push(m);
     }
+    const attempts = [];
+    for (const base of candidates) {
+        let resp;
+        try {
+            resp = await bg_fetch_text({ url: base + path });
+        } catch (error) {
+            attempts.push({ base, error: (error && error.message) || 'unknown error' });
+            continue; // NetworkError from this mirror — try the next one
+        }
+        if (!resp.ok) {
+            attempts.push({ base, error: 'HTTP ' + resp.status });
+            continue; // 403/5xx — same site is up somewhere else, try next mirror
+        }
+        subhdBaseCache = base;
+        return { response: resp, base };
+    }
+    // [reason] keep domain and reason together so a single line shows whether every
+    // mirror failed the same way (environment) or differently (per-mirror)
+    const summary = attempts.map(function(a){ return a.base + ': ' + a.error; }).join(' / ');
+    throw new SubtitleError('SubHD search failed — ' + summary, 'NETWORK_ERROR');
+}
+
+async function search_subhd(query, language){
+    const { response: resp, base } = await subhd_fetch_text('/search/' + encodeURIComponent(query));
     const doc = new DOMParser().parseFromString(resp.text, 'text/html');
     const anchors = Array.from(doc.querySelectorAll('a[href^="/a/"]'));
     // [reason] each result row links the same /a/<code> twice (movie name + edition line);
@@ -2786,16 +2998,30 @@ async function search_subhd(query, language){
         if (results.length >= 30) break;
         const entry = byCode[code];
         if (!entry.text) continue;
-        const container = entry.anchor.closest('.row, table, li') || entry.anchor.closest('div') || entry.anchor;
+        // [reason] scope to a single result row: `table` would cover every row, so a
+        // SUP-only result would inherit a neighbour's ASS tag and survive filtering
+        const container = entry.anchor.closest('.bg-white, tr, li, .row') || entry.anchor.closest('div') || entry.anchor;
         const context = ((container && container.textContent) || '').slice(0, 800);
         if (!scrape_lang_ok(context, language)) continue;
-        const metaParts = Array.from(new Set(context.match(/简体|繁体|英语|双语|SRT|ASS/g) || []));
+        // [reason] SubHD lists each format as <span class="p-1 text-secondary">ASS</span>;
+        // SUP (image subtitles) cannot be parsed, so drop results that offer only SUP
+        const formatTokens = Array.from(container.querySelectorAll('span.text-secondary'))
+            .map(function(span){ return (span.textContent || '').trim().toUpperCase(); })
+            .filter(function(text){ return /^(SRT|ASS|SSA|VTT|SUP)$/.test(text); });
+        if (!hasUsableSubtitleFormat(formatTokens)) continue;
+        const metaParts = Array.from(new Set(context.match(/简体|繁体|英语|双语/g) || [])).concat(formatTokens);
+        // [reason] the download-count span sits right after the bi-download SVG; sort by it below
+        const dlNode = container.querySelector('.bi-download') && container.querySelector('.bi-download').nextElementSibling;
+        const downloads = dlNode ? (parseInt(dlNode.textContent, 10) || 0) : 0;
+        if (downloads) metaParts.push('⬇ ' + downloads);
         results.push({
             title: entry.text,
             meta: metaParts.length ? metaParts.join(' · ') : 'SubHD',
-            pay: { kind: 'subhd', id: code, item: SUBHD_BASE + '/a/' + code }
+            downloads: downloads,
+            pay: { kind: 'subhd', id: code, item: base + '/a/' + code }
         });
     }
+    results.sort(function(a, b){ return b.downloads - a.downloads; });
     return results;
 }
 
@@ -2844,12 +3070,11 @@ async function download_assrt(pay){
     }
     const first = json.sub && json.sub.subs && json.sub.subs[0];
     const filelist = (first && first.filelist) || [];
-    const supportedExts = ['srt', 'vtt', 'ass', 'ssa'];
     let chosen = null;
     for (const file of filelist) {
         const name = file.name || file.url || '';
         const ext = name.split('.').pop().toLowerCase();
-        if (file.url && supportedExts.indexOf(ext) !== -1) {
+        if (file.url && SUBTITLE_FORMATS.indexOf(ext) !== -1) {
             chosen = file;
             break;
         }
@@ -2933,6 +3158,55 @@ async function apply_result_file(file, progressIndicator){
     progressIndicator.updateProgress(100, 'Loaded!');
 }
 
+// 14x14 "archive + check" mark shown on the result whose download is cached
+function create_cached_icon(){
+    const NS = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(NS, 'svg');
+    svg.setAttribute('viewBox', '0 0 16 16');
+    svg.setAttribute('width', '14');
+    svg.setAttribute('height', '14');
+    svg.setAttribute('role', 'img');
+    svg.setAttribute('aria-label', 'Cached');
+    svg.setAttribute('class', 'result_cached_icon');
+    const title = document.createElementNS(NS, 'title');
+    title.textContent = 'Cached';
+    svg.appendChild(title);
+    [
+        'M2.5 5.5h11v7a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1z',
+        'M2.5 5.5l1.5-2.5h8l1.5 2.5',
+        'M5.5 9l1.7 1.7L10.8 7'
+    ].forEach(function(d){
+        const path = document.createElementNS(NS, 'path');
+        path.setAttribute('d', d);
+        path.setAttribute('fill', 'none');
+        path.setAttribute('stroke', '#1976d2');
+        path.setAttribute('stroke-width', '1.4');
+        path.setAttribute('stroke-linecap', 'round');
+        path.setAttribute('stroke-linejoin', 'round');
+        svg.appendChild(path);
+    });
+    set_cached_icon_visible(svg, false);
+    return svg;
+}
+
+// [reason] the HTML `hidden` property does not reliably hide SVG elements, so
+// toggle display directly; aria-hidden keeps the mark out of the a11y tree
+function set_cached_icon_visible(icon, visible){
+    icon.style.display = visible ? '' : 'none';
+    icon.setAttribute('aria-hidden', visible ? 'false' : 'true');
+}
+
+function update_cached_icons(){
+    const key = last_download_cache && last_download_cache.key;
+    const rows = search_results.querySelectorAll(".search_result_item");
+    rows.forEach(function(row){
+        const icon = row.querySelector(".result_cached_icon");
+        if (!icon) return;
+        const result = search_results_cache[Number(row.dataset.index)];
+        set_cached_icon_visible(icon, Boolean(key && result && getDownloadCacheKey(result.pay) === key));
+    });
+}
+
 function render_search_results(results){
     search_results_cache = results;
     while (search_results.firstChild) {
@@ -2948,10 +3222,17 @@ function render_search_results(results){
     results.forEach(function(result, idx){
         const row = document.createElement("div");
         row.className = "search_result_item";
+        row.dataset.index = String(idx);
 
         const titleLine = document.createElement("span");
         titleLine.className = "result_title_line";
-        titleLine.textContent = result.title;
+        const titleText = document.createElement("span");
+        titleText.className = "result_title_text";
+        titleText.textContent = result.title;
+        titleLine.appendChild(titleText);
+        const cachedIcon = create_cached_icon();
+        set_cached_icon_visible(cachedIcon, Boolean(last_download_cache && getDownloadCacheKey(result.pay) === last_download_cache.key));
+        titleLine.appendChild(cachedIcon);
         row.appendChild(titleLine);
 
         const metaLine = document.createElement("span");
@@ -2989,7 +3270,19 @@ async function load_search_result(idx, row){
     const progress = new ProgressIndicator(search_progress_container);
     progress.show('Downloading ' + result.pay.kind + ' subtitle...');
     try {
-        const file = await download_result(result.pay);
+        const key = getDownloadCacheKey(result.pay);
+        let file;
+        if (key && last_download_cache && last_download_cache.key === key) {
+            file = last_download_cache.file;
+        } else {
+            file = await download_result(result.pay);
+            if (key) {
+                // [reason] caches the downloaded bytes, not a parsed subtitle: a parse
+                // failure is fixed by picking another file, not by re-downloading
+                last_download_cache = { key: key, file: file };
+                update_cached_icons();
+            }
+        }
         await apply_result_file(file, progress);
         mark_search_result_selected(row);
         set_search_status('Loaded: ' + result.title, 'green');

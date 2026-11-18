@@ -8,6 +8,7 @@ function installFakeDom() {
     let widgetPresent = false;
     let challengeReady = false;
     let token = '';
+    let expired = false;
     let mutationCallback = null;
     let disconnected = false;
 
@@ -26,6 +27,7 @@ function installFakeDom() {
     global.document = {
         documentElement: {},
         querySelector(selector) {
+            if (selector === '.download-expired-page') return expired ? {} : null;
             return selector === '.download-turnstile-widget' && widgetPresent
                 ? widgetContainer
                 : null;
@@ -52,6 +54,10 @@ function installFakeDom() {
         },
         setToken(value) {
             token = value;
+            if (mutationCallback) mutationCallback();
+        },
+        setExpired(value) {
+            expired = value;
             if (mutationCallback) mutationCallback();
         },
         wasDisconnected() {
@@ -113,6 +119,20 @@ test('does not request foreground focus when the widget never loads', { concurre
             ok: false,
             challengeReady: false,
             error: 'turnstile: widget failed to load'
+        });
+    } finally {
+        fakeDom.restore();
+    }
+});
+
+test('reports an expired download page immediately', { concurrency: false }, async () => {
+    const fakeDom = installFakeDom();
+    try {
+        fakeDom.setExpired(true);
+        assert.deepEqual(await subhdWaitForToken(100), {
+            ok: false,
+            challengeReady: false,
+            error: 'turnstile: download page expired'
         });
     } finally {
         fakeDom.restore();
