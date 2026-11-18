@@ -1,6 +1,13 @@
 import JSZip from 'jszip';
 import { Archive } from 'libarchive.js';
 import { Converter } from 'opencc-js/cn2t';
+const {
+    shouldShowExternalSubtitles,
+    determineSubtitleRenderer,
+    getCueTimes,
+    findReplacementVideo,
+    getCueSyncError
+} = require('../subtitle_logic');
 
 (function(){
 
@@ -180,6 +187,8 @@ class ProgressIndicator {
 
 const subtitle_element = document.createElement("div");
 subtitle_element.id = "subtitle_element";
+subtitle_element.style.pointerEvents = "none";
+subtitle_element.style.textAlign = "center";
 document.body.append(subtitle_element);
 
 const shadow_host = document.createElement("div");
@@ -222,32 +231,6 @@ closeSvg.appendChild(line2);
 closeButton.appendChild(closeSvg);
 menu.appendChild(closeButton);
 
-// Fullscreen is a player-level action: icon button in the title bar, usable from any tab
-const make_video_fullscreen_button = document.createElement("button");
-make_video_fullscreen_button.id = "make_video_fullscreen";
-make_video_fullscreen_button.title = "Make video fullscreen";
-const maximizeSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-maximizeSvg.setAttribute("width", "24");
-maximizeSvg.setAttribute("height", "24");
-maximizeSvg.setAttribute("viewBox", "0 0 24 24");
-maximizeSvg.setAttribute("fill", "none");
-maximizeSvg.setAttribute("stroke", "currentColor");
-maximizeSvg.setAttribute("stroke-width", "2");
-maximizeSvg.setAttribute("stroke-linecap", "round");
-maximizeSvg.setAttribute("stroke-linejoin", "round");
-[
-    "M8 3H5a2 2 0 0 0-2 2v3",
-    "M21 8V5a2 2 0 0 0-2-2h-3",
-    "M3 16v3a2 2 0 0 0 2 2h3",
-    "M16 21h3a2 2 0 0 0 2-2v-3"
-].forEach(function(d){
-    const p = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    p.setAttribute("d", d);
-    maximizeSvg.appendChild(p);
-});
-make_video_fullscreen_button.appendChild(maximizeSvg);
-menu.appendChild(make_video_fullscreen_button);
-
 // Tab bar + pages
 const tab_pages = {};
 const tab_buttons = {};
@@ -256,6 +239,7 @@ function activate_tab(name){
         tab_pages[key].style.display = key === name ? "block" : "none";
         tab_buttons[key].classList.toggle("active", key === name);
     }
+    requestAnimationFrame(sync_tab_heights);
 }
 const tab_bar = document.createElement("div");
 tab_bar.id = "tab_bar";
@@ -279,12 +263,37 @@ const tab_page_main = tab_pages.main;
 const tab_page_search = tab_pages.search;
 const tab_page_settings = tab_pages.settings;
 
-// Keep Search/Settings pages as tall as the Main page so switching tabs does not resize the panel
+// Use the tallest page for all tabs so switching never resizes the panel.
 function sync_tab_heights(){
-    const h = tab_pages.main.offsetHeight;
-    if (h > 0) {
-        tab_pages.search.style.minHeight = h + "px";
-        tab_pages.settings.style.minHeight = h + "px";
+    const pages = Object.values(tab_pages);
+    const visiblePage = pages.find(function(page){ return page.style.display !== "none"; });
+    const pageWidth = visiblePage ? visiblePage.getBoundingClientRect().width : 0;
+    let maxHeight = 0;
+
+    pages.forEach(function(page){
+        page.style.height = "";
+        const hidden = page.style.display === "none";
+        if (hidden) {
+            page.style.display = "block";
+            page.style.position = "absolute";
+            page.style.visibility = "hidden";
+            page.style.pointerEvents = "none";
+            if (pageWidth > 0) page.style.width = pageWidth + "px";
+        }
+        maxHeight = Math.max(maxHeight, page.scrollHeight);
+        if (hidden) {
+            page.style.display = "none";
+            page.style.position = "";
+            page.style.visibility = "";
+            page.style.pointerEvents = "";
+            page.style.width = "";
+        }
+    });
+
+    if (maxHeight > 0) {
+        pages.forEach(function(page){
+            page.style.height = Math.ceil(maxHeight) + "px";
+        });
     }
 }
 
@@ -578,13 +587,77 @@ subtitle_background_color_input.value = "rgba(0, 0, 0, 0.7)";
 subtitle_background_color_line.appendChild(subtitle_background_color_input);
 
 settingsGrid.appendChild(subtitle_offset_line);
-settingsGrid.appendChild(position_offset_line);
-settingsGrid.appendChild(subtitle_font_size_line);
-settingsGrid.appendChild(subtitle_font_line);
-settingsGrid.appendChild(subtitle_font_color_line);
-settingsGrid.appendChild(subtitle_background_color_line);
 
 tab_page_main.appendChild(settingsGrid);
+
+// Show/hide the external subtitles (DOM overlay in windowed mode, TextTrack in fullscreen)
+const showSubsLine = document.createElement("div");
+showSubsLine.className = "line";
+showSubsLine.appendChild(document.createTextNode("Show external subtitles: "));
+var showExternalCheckbox = document.createElement("input");
+showExternalCheckbox.type = "checkbox";
+showExternalCheckbox.id = "show_external_subtitles";
+showExternalCheckbox.checked = true;
+showSubsLine.appendChild(showExternalCheckbox);
+tab_page_main.appendChild(showSubsLine);
+showExternalCheckbox.addEventListener("change", applySubtitleVisibility);
+
+// Low-frequency appearance controls live in Settings so the Main tab stays compact
+const appearanceFieldset = document.createElement("fieldset");
+appearanceFieldset.id = "appearance_fieldset";
+const appearanceLegend = document.createElement("legend");
+appearanceLegend.appendChild(document.createTextNode("Custom subtitle appearance "));
+const appearanceInfoBtn = document.createElement("button");
+appearanceInfoBtn.id = "appearance_info_btn";
+appearanceInfoBtn.type = "button";
+appearanceInfoBtn.textContent = "i";
+appearanceInfoBtn.setAttribute("aria-label", "About custom subtitle appearance");
+appearanceLegend.appendChild(appearanceInfoBtn);
+appearanceFieldset.appendChild(appearanceLegend);
+const appearanceInfoPopover = document.createElement("div");
+appearanceInfoPopover.id = "appearance_info_popover";
+appearanceInfoPopover.textContent = "These settings apply in windowed playback and player-container fullscreen. When the video element itself enters fullscreen, the browser or system controls the subtitle appearance. The time offset and Simplified-to-Traditional conversion always apply.";
+appearanceInfoPopover.style.display = "none";
+appearanceFieldset.appendChild(appearanceInfoPopover);
+const appearanceGrid = document.createElement("div");
+appearanceGrid.id = "appearance_grid";
+appearanceGrid.appendChild(position_offset_line);
+appearanceGrid.appendChild(subtitle_font_size_line);
+appearanceGrid.appendChild(subtitle_font_line);
+appearanceGrid.appendChild(subtitle_font_color_line);
+appearanceGrid.appendChild(subtitle_background_color_line);
+appearanceFieldset.appendChild(appearanceGrid);
+tab_page_settings.appendChild(appearanceFieldset);
+
+function toggleAppearanceInfo(){
+    appearanceInfoPopover.style.display =
+        appearanceInfoPopover.style.display === "none" ? "block" : "none";
+}
+appearanceInfoBtn.addEventListener("click", function(e){
+    e.stopPropagation();
+    toggleAppearanceInfo();
+});
+document.addEventListener("click", function(){
+    if (appearanceInfoPopover.style.display !== "none") {
+        appearanceInfoPopover.style.display = "none";
+    }
+});
+
+// The menu lives in a shadow root, so keyboard events retarget to #shadow_host and
+// site players mistake them for page shortcuts (video controls instead of typing).
+// Stop menu keyboard events in the capture phase so the site never sees them, while
+// keeping normal text editing (no preventDefault).
+["keydown", "keypress", "keyup"].forEach(function(type){
+    window.addEventListener(type, function(e){
+        if (typeof e.composedPath !== "function" ||
+            e.composedPath().indexOf(menu) === -1) return;
+        if (type === "keydown" && e.key === "Escape" &&
+            appearanceInfoPopover.style.display !== "none") {
+            appearanceInfoPopover.style.display = "none";
+        }
+        e.stopImmediatePropagation();
+    }, true);
+});
 
 // Add Simplified/Traditional Chinese conversion status display
 var converter_status_line = document.createElement("div");
@@ -720,7 +793,8 @@ button:active {
     font-family: system-ui, -apple-system, sans-serif;
 }
 
-#settings_grid {
+#settings_grid,
+#appearance_grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 12px 20px;
@@ -890,28 +964,40 @@ legend {
 
 .tab_page {
     margin-top: 12px;
+    overflow-y: auto;
 }
 
-#make_video_fullscreen {
-    position: absolute;
-    top: 16px;
-    right: 56px;
-    background: transparent;
-    border: none;
-    padding: 4px;
-    color: #999;
-    border-radius: 4px;
-    display: flex;
+#appearance_fieldset {
+    position: relative;
+}
+
+#appearance_info_btn {
+    width: 18px;
+    height: 18px;
+    min-width: 18px;
+    padding: 0;
+    margin-left: 4px;
+    border-radius: 50%;
+    font-size: 11px;
+    line-height: 1;
+    display: inline-flex;
     align-items: center;
     justify-content: center;
-    transition: all 0.2s;
-    width: auto;
-    height: auto;
+    vertical-align: middle;
 }
 
-#make_video_fullscreen:hover {
+#appearance_info_popover {
+    position: absolute;
+    top: 24px;
+    left: 8px;
+    right: 8px;
+    background-color: #fffbe6;
+    border: 1px solid #e6d90a;
+    border-radius: 6px;
+    padding: 8px 10px;
+    z-index: 10;
     color: #333;
-    background-color: #f0f0f0;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.15);
 }
 
 #search_results {
@@ -1047,6 +1133,7 @@ function update_video_elements_list(){
                 current_video_element.classList.remove("hover_video_element");
             });
             video_list_item.addEventListener("click", function(){
+                const previousTrack = extTrack;
                 var list = shadow_root.querySelectorAll(".video_list_item");
                 for(var i = 0; i < list.length; i++){
                     list[i].classList.remove("selected_video_list");
@@ -1062,6 +1149,10 @@ function update_video_elements_list(){
                     the_video_element = current_video_element;
                     this.classList.add("selected_video_list");
                 }
+                if (previousTrack) previousTrack.mode = "disabled";
+                extTrack = null;
+                extTrackCuesDirty = true;
+                applySubtitleVisibility();
             });
         }());
         video_elements_list.append(video_list_item);
@@ -1075,7 +1166,6 @@ let subtitle_offset_top = parseFloat(shadow_root.getElementById("subtitle_offset
 
 let subtitles = [];
 let the_video_element = null;
-let video_fullscreen = false; // Add fullscreen state variable
 
 let subtitle_font = shadow_root.getElementById("subtitle_font").value;
 let subtitle_font_size = shadow_root.getElementById("subtitle_font_size").value;
@@ -1257,26 +1347,26 @@ function allow_tags(input, tags){
 var allowed_html_tags = ["b", "i", "u", "br"];
 
 setInterval(function(){
+    if (!the_video_element) return;
+    maybeRebindVideo();
+    if (!the_video_element) return;
+    reconcileFullscreenTrack();
+    if (subtitle_element.style.display === "none") return;
     if(subtitles.length == 0) return;
     var t = the_video_element.currentTime;
-    var found = -1;
+    var active = [];
     for(var i = 0; i < subtitles.length; i++){
         if(subtitles[i].begin+subtitle_offset <= t && subtitles[i].end+subtitle_offset >= t){
-            found = i;
-            break;
+            active.push(subtitles[i]);
         }
     }
-    if(found == -1){
-        subtitle_element.textContent = "";
+    while (subtitle_element.firstChild) {
+        subtitle_element.removeChild(subtitle_element.firstChild);
     }
-    else{
-        // Clear subtitle content
-        while (subtitle_element.firstChild) {
-            subtitle_element.removeChild(subtitle_element.firstChild);
-        }
-        for(var i = 0; i < subtitles[found].text.length; i++){
+    for(var i = 0; i < active.length; i++){
+        for(var j = 0; j < active[i].text.length; j++){
             var subtitle_line = document.createElement("div");
-            var sanitizedText = allow_tags(xss(subtitles[found].text[i]), allowed_html_tags);
+            var sanitizedText = allow_tags(xss(active[i].text[j]), allowed_html_tags);
             var tempDiv = document.createElement("div");
             tempDiv.textContent = "";
             const parser = new DOMParser();
@@ -1288,7 +1378,7 @@ setInterval(function(){
                 subtitle_line.appendChild(tempDiv.firstChild);
             }
             subtitle_line.className = "subtitle_line";
-            subtitle_line.style.cssText = "font-family: "+subtitle_font+
+            subtitle_line.style.cssText = "display:inline-block;text-align:center;font-family: "+subtitle_font+
                 ";font-size: "+subtitle_font_size+
                 "px;color:"+subtitle_font_color+
                 ";background-color:"+subtitle_background_color+";";
@@ -1298,6 +1388,205 @@ setInterval(function(){
     }
     subtitle_pos();
 }, 100);
+
+// ======= External TextTrack bridge (site-native fullscreen) =======
+// The site's own fullscreen puts the player in the browser top layer, where our
+// DOM subtitle overlay cannot render. Cues on a TextTrack render together with
+// the video, so the site's native control bar (quality, speed, audio) stays usable.
+const EXT_TRACK_LABEL = "External Subtitles";
+let extTrack = null; // TextTrack bound to the currently selected video
+let extTrackCuesDirty = true;
+
+function showTrackError(error){
+    console.error("External TextTrack error:", error);
+    if (errorMessage) {
+        errorMessage.textContent = "Fullscreen subtitles unavailable: " + error.message;
+        errorMessage.style.color = "red";
+        errorMessage.title = "";
+    }
+}
+
+function ensureExternalTrack(){
+    if (!the_video_element) return null;
+    if (typeof the_video_element.addTextTrack !== "function") {
+        showTrackError(new SubtitleError("selected video does not support TextTrack", "UNSUPPORTED_FORMAT"));
+        return null;
+    }
+    if (extTrack && extTrack._boundVideo === the_video_element) return extTrack;
+    // reuse an existing extension track on this video (TextTracks cannot be removed)
+    for (let i = 0; i < the_video_element.textTracks.length; i++){
+        const t = the_video_element.textTracks[i];
+        if (t.label === EXT_TRACK_LABEL && t.kind === "subtitles") {
+            extTrack = t;
+            extTrack._boundVideo = the_video_element;
+            extTrackCuesDirty = true;
+            if (!t._extHooked) {
+                t._extHooked = true;
+                t.addEventListener("modechange", onExternalTrackModeChange);
+            }
+            return extTrack;
+        }
+    }
+    try {
+        extTrack = the_video_element.addTextTrack("subtitles", EXT_TRACK_LABEL, "");
+        extTrack._boundVideo = the_video_element;
+        extTrackCuesDirty = true;
+        extTrack.mode = "disabled";
+        extTrack._extHooked = true;
+        extTrack.addEventListener("modechange", onExternalTrackModeChange);
+    } catch (error) {
+        showTrackError(error);
+        extTrack = null;
+    }
+    return extTrack;
+}
+
+// Reuse the windowed sanitizer so S2T conversion and basic tags match both renderers
+function buildCueText(textLines){
+    return textLines.map(function(lineText){
+        return allow_tags(xss(lineText), allowed_html_tags).replace(/<br\s*\/?>/gi, "\n");
+    }).join("\n");
+}
+
+function syncExternalCues(track = extTrack){
+    if (!track) return;
+    try {
+        if (typeof VTTCue !== "function") {
+            throw new SubtitleError("this browser does not support VTTCue", "UNSUPPORTED_FORMAT");
+        }
+        if (track.mode === "disabled") track.mode = "hidden"; // cues are only readable then
+        if (track.cues) {
+            for (let i = track.cues.length - 1; i >= 0; i--) track.removeCue(track.cues[i]);
+        }
+        let added = 0;
+        let failed = 0;
+        let firstCueError = null;
+        for (let i = 0; i < subtitles.length; i++){
+            const sub = subtitles[i];
+            const times = getCueTimes(sub.begin, sub.end, subtitle_offset);
+            if (!times) continue;
+            try {
+                track.addCue(new VTTCue(times.startTime, times.endTime, buildCueText(sub.text)));
+                added++;
+            } catch (cueError) {
+                failed++;
+                if (!firstCueError) firstCueError = cueError;
+            }
+        }
+        extTrackCuesDirty = false;
+        const firstErrorMessage = firstCueError &&
+            (firstCueError.message || String(firstCueError));
+        const message = getCueSyncError(
+            subtitles.length,
+            added,
+            failed,
+            firstErrorMessage
+        );
+        if (message) {
+            showTrackError(new SubtitleError(message, "PARSE_ERROR"));
+        }
+    } catch (error) {
+        showTrackError(error);
+    }
+}
+
+function getSubtitleRenderer(){
+    return determineSubtitleRenderer(document.fullscreenElement, the_video_element);
+}
+
+function mountSubtitleElement(renderer){
+    let parent = document.body;
+    const fsEl = document.fullscreenElement;
+    if (renderer === "fullscreen-dom" && fsEl &&
+        fsEl !== document.documentElement && fsEl !== document.body) {
+        parent = fsEl;
+    }
+    if (parent && subtitle_element.parentNode !== parent) {
+        parent.appendChild(subtitle_element);
+    }
+}
+
+function computeDesiredExternalMode(){
+    const wantShown = shouldShowExternalSubtitles(
+        showExternalCheckbox && showExternalCheckbox.checked,
+        subtitles.length,
+        the_video_element
+    );
+    if (!wantShown) return "disabled";
+    return getSubtitleRenderer() === "text-track" ? "showing" : "hidden";
+}
+
+// Single source of truth: which renderer (DOM overlay vs TextTrack) is active
+function applySubtitleVisibility(){
+    const wantShown = shouldShowExternalSubtitles(
+        showExternalCheckbox && showExternalCheckbox.checked,
+        subtitles.length,
+        the_video_element
+    );
+    const renderer = getSubtitleRenderer();
+    const useDom = wantShown && renderer !== "text-track";
+
+    mountSubtitleElement(renderer);
+
+    let track = extTrack;
+    if (wantShown && renderer === "text-track") {
+        track = ensureExternalTrack();
+        if (track && extTrackCuesDirty) syncExternalCues(track);
+    }
+    if (track) {
+        const desired = computeDesiredExternalMode();
+        track.mode = desired;
+    }
+
+    subtitle_element.style.display = useDom ? "" : "none";
+    if (useDom) subtitle_pos();
+}
+
+function reconcileFullscreenTrack(){
+    if (getSubtitleRenderer() !== "text-track" ||
+        !showExternalCheckbox.checked || subtitles.length === 0) return;
+    const track = ensureExternalTrack();
+    if (track) {
+        if (extTrackCuesDirty) syncExternalCues(track);
+        if (track.mode !== "showing") track.mode = "showing";
+    }
+}
+
+// The extension checkbox is authoritative; undo player-driven mode changes.
+function onExternalTrackModeChange(event){
+    if (!extTrack || event.currentTarget !== extTrack) return;
+    if (extTrack.mode === computeDesiredExternalMode()) return; // echo of our own change
+    requestAnimationFrame(applySubtitleVisibility);
+}
+
+// Auto-rebind when the site replaces the <video> element (e.g. quality switch);
+// only when exactly one video is visible, otherwise the user reselects manually
+function maybeRebindVideo(){
+    if (!the_video_element) return;
+    const isVisible = function(v){
+        return v.isConnected && v.offsetWidth > 0 && v.offsetHeight > 0;
+    };
+    const replacement = findReplacementVideo(
+        the_video_element,
+        Array.from(document.getElementsByTagName("video")),
+        isVisible
+    );
+    if (replacement) {
+        const previousTrack = extTrack;
+        extTrack = null;
+        extTrackCuesDirty = true;
+        if (previousTrack) previousTrack.mode = "disabled";
+        the_video_element = replacement;
+        applySubtitleVisibility();
+    }
+}
+
+function onSubtitlesLoaded(){
+    if (showExternalCheckbox) showExternalCheckbox.checked = true;
+    extTrackCuesDirty = true;
+    if (extTrack) syncExternalCues(extTrack);
+    applySubtitleVisibility();
+}
 
 function get_offset(e){
     var top = 0;
@@ -1311,29 +1600,30 @@ function get_offset(e){
 }
 
 function subtitle_pos(){
+    if (!the_video_element) return;
     var subtitle_height = subtitle_element.getBoundingClientRect().height;
-    if(video_fullscreen){
-        var sub_pos_top = the_video_element.getBoundingClientRect().top+
-                        the_video_element.offsetHeight+
-                        subtitle_offset_top-subtitle_height;
-        var sub_pos_left = get_offset(the_video_element)[1];
+    const renderer = getSubtitleRenderer();
+    const videoRect = the_video_element.getBoundingClientRect();
+    const viewportMode = renderer === "fullscreen-dom" ||
+        (renderer === "window-dom" &&
+            videoRect.width >= window.innerWidth * 0.85 &&
+            videoRect.height >= window.innerHeight * 0.75);
+
+    if (viewportMode) {
         subtitle_element.style.position = "fixed";
-        subtitle_element.style.width = the_video_element.offsetWidth+"px";
-        subtitle_element.style.top = sub_pos_top+"px";
-        subtitle_element.style.left = sub_pos_left+"px";
+        subtitle_element.style.width = videoRect.width+"px";
+        subtitle_element.style.top = (videoRect.bottom+subtitle_offset_top-subtitle_height)+"px";
+        subtitle_element.style.left = videoRect.left+"px";
+        subtitle_element.style.zIndex = "2147483647";
+        return;
     }
-    else{
-        var the_video_element_height = the_video_element.offsetHeight;
-        var the_video_element_top = get_offset(the_video_element)[0];
 
-        var sub_pos_top = the_video_element_height+the_video_element_top+subtitle_offset_top-subtitle_height;
-        var sub_pos_left = get_offset(the_video_element)[1];
-
-        subtitle_element.style.position = "absolute";
-        subtitle_element.style.width = the_video_element.offsetWidth+"px";
-        subtitle_element.style.top = sub_pos_top+"px";
-        subtitle_element.style.left = sub_pos_left+"px";
-    }
+    var sub_pos_top = the_video_element.offsetHeight+get_offset(the_video_element)[0]+subtitle_offset_top-subtitle_height;
+    var sub_pos_left = get_offset(the_video_element)[1];
+    subtitle_element.style.position = "absolute";
+    subtitle_element.style.width = the_video_element.offsetWidth+"px";
+    subtitle_element.style.top = sub_pos_top+"px";
+    subtitle_element.style.left = sub_pos_left+"px";
     subtitle_element.style.zIndex = "99999";
 }
 
@@ -1346,7 +1636,7 @@ function time_parse(t){
 }
 
 function parse_ass_subtitles(subs) {
-    subtitles.length = 0;
+    const parsedSubtitles = [];
     
     // Split by lines
     var lines = subs.split(/\r?\n/);
@@ -1433,7 +1723,7 @@ function parse_ass_subtitles(subs) {
                     var endSec = ass_time_parse(endTime);
                     
                     // Add to subtitle array
-                    subtitles.push({
+                    parsedSubtitles.push({
                         begin: startSec,
                         end: endSec,
                         text: textLines
@@ -1444,9 +1734,10 @@ function parse_ass_subtitles(subs) {
     }
     
     // Sort subtitles by time order
-    subtitles.sort(function(a, b) {
+    parsedSubtitles.sort(function(a, b) {
         return a.begin - b.begin;
     });
+    return parsedSubtitles;
 }
 
 // Clean ASS format markers
@@ -1566,6 +1857,7 @@ async function parse_subtitles(subs, format = 'auto') {
         if (subtitleCache.has(cacheKey)) {
             const cached = subtitleCache.get(cacheKey);
             subtitles.push(...cached);
+            onSubtitlesLoaded();
             console.log('Using cached subtitle data');
             return;
         }
@@ -1606,6 +1898,7 @@ async function parse_subtitles(subs, format = 'auto') {
         subtitleCache.set(cacheKey, parsedSubtitles);
         
         console.log(`Successfully parsed ${subtitles.length} subtitles (${format.toUpperCase()} format)`);
+        onSubtitlesLoaded();
         
     } catch (error) {
         if (error instanceof SubtitleError) {
@@ -1761,10 +2054,7 @@ async function parseVttSubtitles(subs) {
 
 // Rename existing function
 async function parseAssSubtitles(subs) {
-    return new Promise((resolve) => {
-        parse_ass_subtitles(subs);
-        resolve([...subtitles]);  // Return copy
-    });
+    return parse_ass_subtitles(subs);
 }
 
 // New: Subtitle validation function
@@ -1816,1163 +2106,6 @@ function validateParsedSubtitles(parsedSubtitles) {
             'POOR_QUALITY_SUBTITLES'
         );
     }
-}
-
-function switch_fullscreen_video(){
-    if(the_video_element == null) {
-        console.warn("Cannot enter fullscreen: no video element selected");
-        return;
-    }
-
-    console.log("Starting fullscreen mode");
-    video_fullscreen = true;
-    
-    // Save video's original parent element and position info for later restoration
-    if (!the_video_element._originalParent) {
-        the_video_element._originalParent = the_video_element.parentNode;
-        the_video_element._originalStyles = {
-            position: the_video_element.style.position,
-            top: the_video_element.style.top,
-            left: the_video_element.style.left,
-            width: the_video_element.style.width,
-            height: the_video_element.style.height,
-            zIndex: the_video_element.style.zIndex,
-            display: the_video_element.style.display || "block"
-        };
-    }
-
-    // Set video element styles first
-    the_video_element.style.position = "fixed";
-    the_video_element.style.top = "0px";
-    the_video_element.style.left = "0px";
-    the_video_element.style.zIndex = "99998";
-    the_video_element.style.width = "100%";
-    the_video_element.style.height = "100%";
-    the_video_element.style.display = "block";
-    the_video_element.style.visibility = "visible";
-    the_video_element.style.opacity = "1";
-    
-    // Set subtitle element styles
-    document.getElementById("subtitle_element").style.zIndex = "99999";
-    document.documentElement.style.overflow = "hidden";
-    
-    // Create or update black background
-    var blackBackground;
-    if(!document.getElementById("fullscreen_video_black_background")){
-        blackBackground = document.createElement("div");
-        blackBackground.id = "fullscreen_video_black_background";
-        document.body.append(blackBackground);
-    } else {
-        blackBackground = document.getElementById("fullscreen_video_black_background");
-    }
-    
-    // Set black background styles, ensure z-index is lower than video
-    blackBackground.style.backgroundColor = "black";
-    blackBackground.style.margin = "0px";
-    blackBackground.style.padding = "0px";
-    blackBackground.style.position = "fixed";
-    blackBackground.style.top = "0px";
-    blackBackground.style.left = "0px";
-    blackBackground.style.zIndex = "99997";
-    blackBackground.style.width = "100%";
-    blackBackground.style.height = "100%";
-    
-    // Temporarily store reference to original parent element
-    var originalParent = the_video_element.parentNode;
-    
-    // Move video element above black background
-    document.body.appendChild(the_video_element);
-    
-    // Create control interface
-    createFullscreenControls();
-    
-    // Request fullscreen and handle errors
-    document.documentElement.requestFullscreen().catch(err => {
-        console.error("Fullscreen request failed:", err);
-        
-        // Create error notification element
-        var errorMessage = document.createElement("div");
-        errorMessage.id = "fullscreen_error_message";
-        errorMessage.style.position = "fixed";
-        errorMessage.style.bottom = "10px";
-        errorMessage.style.left = "50%";
-        errorMessage.style.transform = "translateX(-50%)";
-        errorMessage.style.backgroundColor = "rgba(255, 0, 0, 0.8)";
-        errorMessage.style.color = "white";
-        errorMessage.style.padding = "10px";
-        errorMessage.style.borderRadius = "5px";
-        errorMessage.style.zIndex = "100000";
-        errorMessage.style.fontFamily = "Arial, sans-serif";
-        errorMessage.style.fontSize = "14px";
-        errorMessage.style.textAlign = "center";
-        errorMessage.textContent = "Fullscreen request failed. Please try pressing F11 manually or use browser's fullscreen feature";
-        
-        document.body.appendChild(errorMessage);
-        
-        // Remove error notification after 5 seconds
-        setTimeout(() => {
-            if (document.getElementById("fullscreen_error_message")) {
-                document.getElementById("fullscreen_error_message").remove();
-            }
-        }, 5000);
-        
-        // Even if fullscreen fails, still try to display video with fixed positioning
-        adjustVideoPosition();
-    });
-    
-    // Enable keyboard controls
-    enableKeyboardControls();
-    
-    // Add video click handler for play/pause toggle
-    window._videoClickHandler = function(e) {
-        // Prevent default behavior
-        e.preventDefault();
-        e.stopPropagation();
-        togglePlayPause();
-    };
-    the_video_element.addEventListener('click', window._videoClickHandler);
-    
-    // Improved safety mechanism: only exit when truly detecting fullscreen failure
-    // Extend timeout to 5 minutes, giving users enough time to use
-    window._fullscreenTimeout = setTimeout(function() {
-        // Check if really stuck in abnormal state
-        if (video_fullscreen && !document.fullscreenElement) {
-            // If marked as fullscreen but not actually in fullscreen state, there might be a problem
-            console.warn("Detected abnormal fullscreen state, automatically restoring normal state");
-            restoreVideoState();
-        } else if (video_fullscreen && document.fullscreenElement) {
-            // If everything is normal, continue monitoring
-            console.log("Fullscreen state is normal, continue using");
-        }
-    }, 300000); // Extended to 5 minutes
-}
-
-// Helper function to create SVG icons
-function createSVGIcon(type) {
-    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    svg.setAttribute("width", "24");
-    svg.setAttribute("height", "24");
-    svg.setAttribute("viewBox", "0 0 24 24");
-    svg.setAttribute("fill", "white");
-    svg.style.display = "block";
-    svg.style.pointerEvents = "none"; // Crucial: prevent SVG from intercepting clicks
-    
-    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    
-    switch(type) {
-        case 'play':
-            path.setAttribute("d", "M8 5v14l11-7z");
-            break;
-        case 'pause':
-            path.setAttribute("d", "M6 4h4v16H6V4zm8 0h4v16h-4V4z");
-            break;
-        case 'volume-high':
-            path.setAttribute("d", "M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z");
-            break;
-        case 'volume-low':
-            path.setAttribute("d", "M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z");
-            break;
-        case 'volume-muted':
-            path.setAttribute("d", "M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z");
-            break;
-        case 'settings':
-            path.setAttribute("d", "M19.14,12.94c0.04-0.3,0.06-0.61,0.06-0.94c0-0.32-0.02-0.64-0.07-0.94l2.03-1.58c0.18-0.14,0.23-0.41,0.12-0.61 l-1.92-3.32c-0.12-0.22-0.37-0.29-0.59-0.22l-2.39,0.96c-0.5-0.38-1.03-0.7-1.62-0.94L14.4,2.81c-0.04-0.24-0.24-0.41-0.48-0.41 h-3.84c-0.24,0-0.43,0.17-0.47,0.41L9.25,5.35C8.66,5.59,8.12,5.92,7.63,6.29L5.24,5.33c-0.22-0.08-0.47,0-0.59,0.22L2.74,8.87 C2.62,9.08,2.66,9.34,2.86,9.48l2.03,1.58C4.84,11.36,4.8,11.69,4.8,12s0.02,0.64,0.07,0.94l-2.03,1.58 c-0.18,0.14-0.23,0.41-0.12,0.61l1.92,3.32c0.12,0.22,0.37,0.29,0.59,0.22l2.39-0.96c0.5,0.38,1.03,0.7,1.62,0.94l0.36,2.54 c0.05,0.24,0.24,0.41,0.48,0.41h3.84c0.24,0,0.44-0.17,0.47-0.41l0.36-2.54c0.59-0.24,1.13-0.56,1.62-0.94l2.39,0.96 c0.22,0.08,0.47,0,0.59-0.22l1.92-3.32c0.12-0.22,0.07-0.47-0.12-0.61L19.14,12.94z M12,15.6c-1.98,0-3.6-1.62-3.6-3.6 s1.62-3.6,3.6-3.6s3.6,1.62,3.6,3.6S13.98,15.6,12,15.6z");
-            break;
-        case 'fullscreen-exit':
-            path.setAttribute("d", "M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z");
-            break;
-        case 'subtitle':
-            path.setAttribute("d", "M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zM4 12h4v2H4v-2zm10 6H4v-2h10v2zm6 0h-4v-2h4v2zm0-4H10v-2h10v2z");
-            break;
-        case 'forward':
-            path.setAttribute("d", "M4 18l8.5-6L4 6v12zm9-12v12l8.5-6L13 6z");
-            break;
-        case 'backward':
-            path.setAttribute("d", "M11 18V6l-8.5 6 8.5 6zm.5-6l8.5 6V6l-8.5 6z");
-            break;
-    }
-    
-    svg.appendChild(path);
-    return svg;
-}
-
-let osdTimeout;
-let seekAccumulator = 0;
-let seekResetTimeout;
-let lastSeekDirection = 0;
-
-function showOSD(text, iconType, position = 'top') {
-    const osd = document.getElementById("fullscreen_osd");
-    if (!osd) return;
-    
-    // Clear content
-    while (osd.firstChild) {
-        osd.removeChild(osd.firstChild);
-    }
-    
-    // Position logic
-    switch(position) {
-        case 'left':
-            osd.style.top = "50%";
-            osd.style.left = "10%";
-            osd.style.transform = "translate(-50%, -50%)";
-            break;
-        case 'right':
-            osd.style.top = "50%";
-            osd.style.left = "90%";
-            osd.style.transform = "translate(-50%, -50%)";
-            break;
-        case 'top':
-        default:
-            osd.style.top = "10%";
-            osd.style.left = "50%";
-            osd.style.transform = "translateX(-50%)"; 
-            break;
-    }
-    
-    // Add icon if provided
-    if (iconType) {
-        const icon = createSVGIcon(iconType);
-        // Override size for OSD if needed, but 24px is usually fine
-        icon.style.pointerEvents = "none";
-        osd.appendChild(icon);
-    }
-    
-    // Add text
-    const textSpan = document.createElement("span");
-    textSpan.textContent = text;
-    textSpan.style.lineHeight = "24px"; // Align with icon
-    osd.appendChild(textSpan);
-    
-    // Show
-    osd.style.opacity = "1";
-    
-    // Auto hide
-    clearTimeout(osdTimeout);
-    osdTimeout = setTimeout(() => {
-        osd.style.opacity = "0";
-        // Reset position after hide to avoid jumpiness on next show if position changes
-    }, 1500); // 1.5 seconds
-}
-
-// Create fullscreen control interface
-function createFullscreenControls() {
-    // Check if control interface already exists
-    if (document.getElementById("fullscreen_controls")) {
-        return;
-    }
-    
-    // Create OSD element (Youtube style)
-    if (!document.getElementById("fullscreen_osd")) {
-        const osd = document.createElement("div");
-        osd.id = "fullscreen_osd";
-        osd.style.cssText = `
-            position: fixed;
-            top: 10%;
-            left: 50%;
-            transform: translateX(-50%);
-            background: transparent;
-            padding: 0;
-            color: white;
-            font-size: 24px;
-            font-weight: bold;
-            font-family: Arial, sans-serif;
-            pointer-events: none;
-            opacity: 0;
-            transition: opacity 0.2s ease;
-            z-index: 1000001;
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            text-shadow: 0 2px 8px rgba(0,0,0,0.8);
-            filter: drop-shadow(0 2px 8px rgba(0,0,0,0.8));
-        `;
-        document.body.appendChild(osd);
-    }
-    
-    // Create control interface container
-    var controls = document.createElement("div");
-    controls.id = "fullscreen_controls";
-    controls.style.cssText = `
-        position: fixed;
-        bottom: 0;
-        left: 0;
-        width: 100%;
-        box-sizing: border-box; /* Crucial: prevent padding from increasing total width */
-        background: linear-gradient(to top, rgba(0, 0, 0, 0.8) 0%, rgba(0, 0, 0, 0.6) 70%, transparent 100%);
-        padding: 20px 30px 15px 30px;
-        z-index: 999999;
-        color: white;
-        font-family: Arial, sans-serif;
-        transition: opacity 0.3s ease, transform 0.3s ease;
-        opacity: 0;
-        transform: translateY(20px);
-    `;
-    
-    // Create main controls row
-    const controlsRow = document.createElement("div");
-    controlsRow.style.cssText = `
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        margin-bottom: 12px;
-    `;
-    
-    // LEFT SECTION: Play controls and time
-    const leftSection = document.createElement("div");
-    leftSection.style.cssText = `
-        display: flex;
-        align-items: center;
-        gap: 15px;
-    `;
-    
-    // Play/Pause button
-    const playPauseBtn = document.createElement("button");
-    playPauseBtn.id = "controls_playpause";
-    playPauseBtn.className = "control-btn";
-    playPauseBtn.style.cssText = `
-        background: transparent;
-        border: none;
-        cursor: pointer;
-        padding: 5px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        transition: transform 0.2s ease, opacity 0.2s ease;
-    `;
-    playPauseBtn.appendChild(createSVGIcon('pause'));
-    
-    // Volume Control Wrapper
-    const volumeWrapper = document.createElement("div");
-    volumeWrapper.id = "volume_wrapper";
-    volumeWrapper.style.cssText = `
-        position: relative;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        margin: 0 5px;
-    `;
-    
-    // Mute Button (Click to mute/unmute)
-    const muteBtn = document.createElement("button");
-    muteBtn.id = "controls_mute_btn";
-    muteBtn.className = "control-btn";
-    muteBtn.style.cssText = `
-        background: transparent;
-        border: none;
-        cursor: pointer;
-        padding: 5px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        transition: transform 0.2s ease, opacity 0.2s ease;
-        position: relative;
-        z-index: 1000002; /* Ensure it's above the slider container */
-    `;
-    muteBtn.appendChild(createSVGIcon('volume-high'));
-    
-    // Volume slider container
-    const volumeSliderContainer = document.createElement("div");
-    volumeSliderContainer.id = "volume_slider_container";
-    volumeSliderContainer.style.cssText = `
-        position: absolute;
-        bottom: 100%;
-        left: 50%;
-        transform: translateX(-50%);
-        background: rgba(0, 0, 0, 0.9);
-        padding: 15px 10px;
-        border-radius: 8px;
-        transition: opacity 0.2s ease, visibility 0.2s ease;
-        opacity: 0;
-        visibility: hidden;
-        display: flex;
-        justify-content: center;
-        margin-bottom: 5px;
-        z-index: 1000000; /* Ensure it's on top */
-        cursor: default; /* Prevent pointer events from passing through easily */
-        pointer-events: none; /* Crucial: prevent blocking clicks when hidden */
-    `;
-    
-    // Volume Slider
-    const volumeSlider = document.createElement("input");
-    volumeSlider.id = "volume_slider";
-    volumeSlider.type = "range";
-    volumeSlider.min = "0";
-    volumeSlider.max = "100";
-    volumeSlider.value = "100";
-    // Cross-browser vertical slider styles
-    volumeSlider.style.cssText = `
-        width: 6px;
-        height: 80px;
-        -webkit-appearance: slider-vertical; /* WebKit */
-        appearance: slider-vertical;
-        cursor: pointer;
-        background: transparent; 
-        z-index: 1000001;
-    `;
-    // For Firefox specifically (as it might not support appearance: slider-vertical well in all contexts or versions)
-    // We can add 'orient="vertical"' attribute
-    volumeSlider.setAttribute("orient", "vertical");
-    
-    volumeSliderContainer.appendChild(volumeSlider);
-    volumeWrapper.appendChild(muteBtn);
-    volumeWrapper.appendChild(volumeSliderContainer);
-    
-    // Hover behavior for volume wrapper
-    volumeWrapper.addEventListener('mouseenter', function() {
-        volumeSliderContainer.style.opacity = '1';
-        volumeSliderContainer.style.visibility = 'visible';
-        volumeSliderContainer.style.pointerEvents = 'auto';
-    });
-    
-    volumeWrapper.addEventListener('mouseleave', function() {
-        volumeSliderContainer.style.opacity = '0';
-        volumeSliderContainer.style.visibility = 'hidden';
-        volumeSliderContainer.style.pointerEvents = 'none';
-    });
-
-    // Time display
-    const timeDisplay = document.createElement("div");
-    timeDisplay.id = "controls_time_info";
-    timeDisplay.style.cssText = `
-        font-size: 14px;
-        font-weight: 500;
-        color: white;
-        min-width: 120px;
-        user-select: none;
-    `;
-    timeDisplay.textContent = "00:00 / 00:00";
-    
-    // Skip buttons
-    const backwardBtn = document.createElement("button");
-    backwardBtn.id = "controls_backward";
-    backwardBtn.className = "control-btn";
-    backwardBtn.style.cssText = playPauseBtn.style.cssText;
-    backwardBtn.appendChild(createSVGIcon('backward'));
-    
-    const forwardBtn = document.createElement("button");
-    forwardBtn.id = "controls_forward";
-    forwardBtn.className = "control-btn";
-    forwardBtn.style.cssText = playPauseBtn.style.cssText;
-    forwardBtn.appendChild(createSVGIcon('forward'));
-    
-    leftSection.appendChild(playPauseBtn);
-    leftSection.appendChild(volumeWrapper);
-    leftSection.appendChild(timeDisplay);
-    leftSection.appendChild(backwardBtn);
-    leftSection.appendChild(forwardBtn);
-    
-    // RIGHT SECTION: Settings and fullscreen
-    const rightSection = document.createElement("div");
-    rightSection.style.cssText = `
-        display: flex;
-        align-items: center;
-        gap: 20px;
-    `;
-    
-    // Settings button
-    const settingsBtn = document.createElement("button");
-    settingsBtn.id = "controls_settings";
-    settingsBtn.className = "control-btn";
-    settingsBtn.style.cssText = playPauseBtn.style.cssText + "min-width: 34px; min-height: 34px;";
-    settingsBtn.title = "Settings";
-    settingsBtn.appendChild(createSVGIcon('settings'));
-    
-    // Exit fullscreen button (Manual creation)
-    const exitFullscreenBtn = document.createElement("button");
-    exitFullscreenBtn.id = "controls_exit_fullscreen";
-    exitFullscreenBtn.className = "control-btn";
-    exitFullscreenBtn.style.cssText = playPauseBtn.style.cssText + "min-width: 34px; min-height: 34px;";
-    exitFullscreenBtn.title = "Exit Fullscreen";
-    
-    // Use standard Exit Fullscreen icon
-    const exitSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    exitSvg.setAttribute("width", "24");
-    exitSvg.setAttribute("height", "24");
-    exitSvg.setAttribute("viewBox", "0 0 24 24");
-    exitSvg.setAttribute("fill", "white");
-    exitSvg.style.display = "block";
-    exitSvg.style.pointerEvents = "none";
-    
-    const exitPath = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    exitPath.setAttribute("d", "M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z");
-    
-    exitSvg.appendChild(exitPath);
-    exitFullscreenBtn.appendChild(exitSvg);
-    
-    // Standard Order: Settings -> Exit Fullscreen
-    rightSection.appendChild(settingsBtn);
-    rightSection.appendChild(exitFullscreenBtn);
-    
-    // Assemble controls row
-    controlsRow.appendChild(leftSection);
-    controlsRow.appendChild(rightSection);
-    
-    // PROGRESS BAR SECTION
-    const progressSection = document.createElement("div");
-    progressSection.style.cssText = `
-        position: relative;
-        width: 100%;
-        height: 20px;
-        display: flex;
-        align-items: center;
-        cursor: pointer;
-    `;
-    
-    const progressContainer = document.createElement("div");
-    progressContainer.id = "progress_container";
-    progressContainer.style.cssText = `
-        position: relative;
-        width: 100%;
-        height: 5px;
-        background-color: rgba(255, 255, 255, 0.3);
-        border-radius: 3px;
-        overflow: visible;
-        transition: height 0.2s ease;
-    `;
-    
-    // Buffer bar (Added feature)
-    const bufferBar = document.createElement("div");
-    bufferBar.id = "controls_buffer";
-    bufferBar.style.cssText = `
-        position: absolute;
-        left: 0;
-        top: 0;
-        height: 100%;
-        background-color: rgba(255, 255, 255, 0.4);
-        border-radius: 3px;
-        width: 0%;
-        transition: width 0.2s linear;
-        z-index: 1;
-    `;
-    
-    const progressBar = document.createElement("div");
-    progressBar.id = "controls_progress";
-    progressBar.style.cssText = `
-        position: absolute;
-        left: 0;
-        top: 0;
-        height: 100%;
-        background-color: #4FC3F7;
-        border-radius: 3px;
-        width: 0%;
-        transition: width 0.1s linear;
-        z-index: 2; /* Ensure it's above buffer bar */
-    `;
-    
-    const progressHoverDot = document.createElement("div");
-    progressHoverDot.id = "progress_hover_dot";
-    progressHoverDot.style.cssText = `
-        position: absolute;
-        top: 50%;
-        transform: translate(-50%, -50%);
-        width: 14px;
-        height: 14px;
-        background-color: #4FC3F7;
-        border-radius: 50%;
-        opacity: 0;
-        pointer-events: none;
-        transition: opacity 0.2s ease;
-        box-shadow: 0 0 8px rgba(79, 195, 247, 0.6);
-        z-index: 3; /* Ensure dot is on top */
-    `;
-    
-    const timeTooltip = document.createElement("div");
-    timeTooltip.id = "time_tooltip";
-    timeTooltip.style.cssText = `
-        position: absolute;
-        bottom: 25px;
-        transform: translateX(-50%);
-        background-color: rgba(0, 0, 0, 0.9);
-        color: white;
-        padding: 4px 8px;
-        border-radius: 4px;
-        font-size: 12px;
-        font-weight: 500;
-        white-space: nowrap;
-        opacity: 0;
-        pointer-events: none;
-        transition: opacity 0.2s ease;
-        z-index: 10;
-    `;
-    timeTooltip.textContent = "00:00";
-    
-    progressContainer.appendChild(bufferBar);
-    progressContainer.appendChild(progressBar);
-    progressContainer.appendChild(progressHoverDot);
-    progressContainer.appendChild(timeTooltip);
-    progressSection.appendChild(progressContainer);
-    
-    // Assemble all sections
-    controls.appendChild(progressSection);
-    controls.appendChild(controlsRow);
-    
-    // Add to page
-    document.body.appendChild(controls);
-    
-    // Store event handlers for cleanup
-    window._fullscreenEventHandlers = {};
-    
-    // Add control events
-    playPauseBtn.addEventListener("click", function(e) {
-        e.stopPropagation();
-        togglePlayPause();
-    });
-    
-    backwardBtn.addEventListener("click", function(e) {
-        e.stopPropagation();
-        skipTime(-10);
-    });
-    
-    forwardBtn.addEventListener("click", function(e) {
-        e.stopPropagation();
-        skipTime(10);
-    });
-    
-    // Mute/Unmute control
-    muteBtn.addEventListener("click", function(e) {
-        e.stopPropagation();
-        if (!the_video_element) return;
-        
-        if (the_video_element.muted) {
-            // Unmute
-            the_video_element.muted = false;
-            // If volume was 0, restore to default or last known good volume
-            if (the_video_element.volume === 0) {
-                the_video_element.volume = 0.5; // Default to 50% if it was 0
-            } else if (the_video_element._lastVolume && the_video_element._lastVolume > 0) {
-                the_video_element.volume = the_video_element._lastVolume;
-            }
-        } else {
-            // Mute
-            the_video_element._lastVolume = the_video_element.volume; // Save current volume
-            the_video_element.muted = true;
-        }
-        updateVolumeIcon();
-    });
-    
-    const updateVolumeFromSlider = function(e) {
-        e.stopPropagation();
-        if (the_video_element) {
-            const newVolume = this.value / 100;
-            the_video_element.volume = newVolume;
-            
-            // If sliding volume, ensure it's not muted
-            if (newVolume > 0 && the_video_element.muted) {
-                the_video_element.muted = false;
-            }
-            
-            // If dragged to 0, mute it
-            if (newVolume === 0) {
-                the_video_element.muted = true;
-            }
-            
-            updateVolumeIcon();
-        }
-    };
-
-    volumeSlider.addEventListener("input", updateVolumeFromSlider);
-    volumeSlider.addEventListener("change", updateVolumeFromSlider);
-    
-    // Settings button (open menu)
-    settingsBtn.addEventListener("click", function(e) {
-        e.stopPropagation();
-        const menu = shadow_root.getElementById("addsubtitle_menu");
-        if (menu) {
-            menu.style.display = "inline-block";
-        }
-    });
-    
-    // Exit fullscreen
-    exitFullscreenBtn.addEventListener("click", function(e) {
-        e.stopPropagation();
-        if (document.fullscreenElement) {
-            document.exitFullscreen();
-        }
-    });
-    
-    // Progress bar interaction
-    window._fullscreenEventHandlers.progressClick = function(e) {
-        if (!the_video_element) return;
-        const rect = progressContainer.getBoundingClientRect();
-        const offsetX = e.clientX - rect.left;
-        const percentage = Math.max(0, Math.min(1, offsetX / rect.width));
-        the_video_element.currentTime = percentage * the_video_element.duration;
-        updateControlsUI();
-    };
-    
-    window._fullscreenEventHandlers.progressMouseMove = function(e) {
-        if (!the_video_element) return;
-        const rect = progressContainer.getBoundingClientRect();
-        const offsetX = e.clientX - rect.left;
-        const percentage = Math.max(0, Math.min(1, offsetX / rect.width));
-        const time = percentage * the_video_element.duration;
-        
-        // Update tooltip
-        timeTooltip.textContent = formatTime(time);
-        timeTooltip.style.left = offsetX + "px";
-        timeTooltip.style.opacity = "1";
-        
-        // Update hover dot
-        progressHoverDot.style.left = (percentage * 100) + "%";
-        progressHoverDot.style.opacity = "1";
-        
-        // Expand progress bar on hover
-        progressContainer.style.height = "8px";
-    };
-    
-    window._fullscreenEventHandlers.progressMouseEnter = function() {
-        progressContainer.style.height = "8px";
-    };
-    
-    window._fullscreenEventHandlers.progressMouseLeave = function() {
-        timeTooltip.style.opacity = "0";
-        progressHoverDot.style.opacity = "0";
-        progressContainer.style.height = "5px";
-    };
-    
-    progressContainer.addEventListener("click", window._fullscreenEventHandlers.progressClick);
-    progressContainer.addEventListener("mousemove", window._fullscreenEventHandlers.progressMouseMove);
-    progressContainer.addEventListener("mouseenter", window._fullscreenEventHandlers.progressMouseEnter);
-    progressContainer.addEventListener("mouseleave", window._fullscreenEventHandlers.progressMouseLeave);
-    
-    // Auto hide/show control interface
-    var hideTimeout;
-    window._fullscreenEventHandlers.controlsMouseMove = function() {
-        var controls = document.getElementById("fullscreen_controls");
-        if (controls && video_fullscreen) {
-            controls.style.opacity = "1";
-            controls.style.transform = "translateY(0)";
-            clearTimeout(hideTimeout);
-            hideTimeout = setTimeout(function() {
-                // Check if mouse is hovering volume wrapper
-                const volumeWrapper = document.getElementById("volume_wrapper");
-                const isHoveringVolume = volumeWrapper && volumeWrapper.matches(':hover');
-                
-                if (!isHoveringVolume) {
-                    controls.style.opacity = "0";
-                    controls.style.transform = "translateY(20px)";
-                }
-            }, 3000);
-        }
-    };
-    
-    window._fullscreenEventHandlers.controlsMouseEnter = function() {
-        clearTimeout(hideTimeout);
-    };
-    
-    document.addEventListener("mousemove", window._fullscreenEventHandlers.controlsMouseMove);
-    controls.addEventListener("mouseenter", window._fullscreenEventHandlers.controlsMouseEnter);
-    
-    // Button hover effects
-    const controlButtons = controls.querySelectorAll('.control-btn');
-    controlButtons.forEach(btn => {
-        btn.addEventListener('mouseenter', function() {
-            this.style.transform = 'scale(1.15)';
-            this.style.opacity = '1';
-        });
-        btn.addEventListener('mouseleave', function() {
-            this.style.transform = 'scale(1)';
-            this.style.opacity = '0.9';
-        });
-    });
-    
-    // Initial update of control bar
-    updateControlsUI();
-    
-    // Periodically update control bar
-    window._fullscreenUpdateInterval = setInterval(function() {
-        if (video_fullscreen && the_video_element) {
-            updateControlsUI();
-        }
-    }, 100);
-}
-
-// Update volume icon based on current volume
-function updateVolumeIcon() {
-    if (!the_video_element) return;
-    
-    const muteBtn = document.getElementById("controls_mute_btn");
-    if (!muteBtn) return;
-    
-    // Remove old icon
-    const oldIcon = muteBtn.querySelector('svg');
-    if (oldIcon) oldIcon.remove();
-    
-    // Add new icon based on volume level
-    const volume = the_video_element.volume;
-    let iconType = 'volume-high';
-    
-    if (volume === 0 || the_video_element.muted) {
-        iconType = 'volume-muted';
-    } else if (volume < 0.5) {
-        iconType = 'volume-low';
-    }
-    
-    muteBtn.appendChild(createSVGIcon(iconType));
-    
-    // Sync slider value
-    const volumeSlider = document.getElementById("volume_slider");
-    if (volumeSlider) {
-        if (the_video_element.muted) {
-            volumeSlider.value = 0;
-        } else {
-            volumeSlider.value = volume * 100;
-        }
-    }
-}
-
-// Update control interface UI
-function updateControlsUI() {
-    if (!the_video_element || !video_fullscreen) return;
-    
-    var timeInfo = document.getElementById("controls_time_info");
-    var progress = document.getElementById("controls_progress");
-    var bufferBar = document.getElementById("controls_buffer");
-    var playPauseBtn = document.getElementById("controls_playpause");
-    
-    if (timeInfo && progress && playPauseBtn) {
-        // Update time info
-        var currentTime = formatTime(the_video_element.currentTime);
-        var duration = formatTime(the_video_element.duration);
-        timeInfo.textContent = currentTime + " / " + duration;
-        
-        // Update progress bar
-        var progressPercent = (the_video_element.currentTime / the_video_element.duration) * 100;
-        progress.style.width = progressPercent + "%";
-        
-        // Update buffer bar
-        if (bufferBar && the_video_element.buffered.length > 0) {
-            var bufferedEnd = 0;
-            // Find the buffered range that covers the current time
-            for (var i = 0; i < the_video_element.buffered.length; i++) {
-                if (the_video_element.buffered.start(i) <= the_video_element.currentTime && 
-                    the_video_element.buffered.end(i) >= the_video_element.currentTime) {
-                    bufferedEnd = the_video_element.buffered.end(i);
-                    break;
-                }
-            }
-            // If current time is not in any buffer range (e.g. seeking), use the last buffer range or keep 0
-            if (bufferedEnd === 0 && the_video_element.buffered.length > 0) {
-                 // Optional: show the furthest buffered point
-                 // bufferedEnd = the_video_element.buffered.end(the_video_element.buffered.length - 1);
-            }
-            
-            var bufferPercent = (bufferedEnd / the_video_element.duration) * 100;
-            bufferBar.style.width = bufferPercent + "%";
-        }
-        
-        // Update play/pause button icon
-        const oldIcon = playPauseBtn.querySelector('svg');
-        if (oldIcon) oldIcon.remove();
-        playPauseBtn.appendChild(createSVGIcon(the_video_element.paused ? 'play' : 'pause'));
-        
-        // Update volume slider
-        const volumeSlider = document.getElementById("volume_slider");
-        if (volumeSlider) {
-            if (the_video_element.muted) {
-                volumeSlider.value = 0;
-            } else {
-                volumeSlider.value = the_video_element.volume * 100;
-            }
-        }
-        updateVolumeIcon();
-    }
-}
-
-// Format time (seconds -> HH:MM:SS or MM:SS)
-function formatTime(seconds) {
-    if (isNaN(seconds)) return "00:00";
-    
-    seconds = Math.floor(seconds);
-    var hours = Math.floor(seconds / 3600);
-    var minutes = Math.floor((seconds % 3600) / 60);
-    var remainingSeconds = seconds % 60;
-    
-    if (hours > 0) {
-        return (hours < 10 ? "0" : "") + hours + ":" +
-               (minutes < 10 ? "0" : "") + minutes + ":" + 
-               (remainingSeconds < 10 ? "0" : "") + remainingSeconds;
-    } else {
-        return (minutes < 10 ? "0" : "") + minutes + ":" + 
-               (remainingSeconds < 10 ? "0" : "") + remainingSeconds;
-    }
-}
-
-// Play/pause toggle
-function togglePlayPause() {
-    if (!the_video_element) return;
-    
-    if (the_video_element.paused) {
-        the_video_element.play();
-    } else {
-        the_video_element.pause();
-    }
-    
-    updateControlsUI();
-}
-
-// Adjust volume
-function adjustVolume(delta) {
-    if (!the_video_element) return;
-    
-    var newVolume = Math.max(0, Math.min(1, the_video_element.volume + delta));
-    the_video_element.volume = newVolume;
-    
-    // Ensure muted is false if we increase volume
-    if (delta > 0 && the_video_element.muted) {
-        the_video_element.muted = false;
-    }
-    // If volume becomes 0, mute it
-    if (newVolume === 0) {
-        the_video_element.muted = true;
-    }
-    
-    updateVolumeIcon();
-    
-    // Show OSD in fullscreen
-    if (video_fullscreen) {
-        const percent = Math.round(newVolume * 100) + "%";
-        let icon = 'volume-high';
-        if (newVolume === 0) icon = 'volume-muted';
-        else if (newVolume < 0.5) icon = 'volume-low';
-        showOSD(percent, icon);
-    }
-}
-
-// Fast forward/rewind
-function skipTime(seconds) {
-    if (!the_video_element) return;
-    
-    // Accumulate seek time logic
-    const direction = seconds > 0 ? 1 : -1;
-    
-    // If direction changed, reset accumulator
-    if (direction !== lastSeekDirection) {
-        seekAccumulator = 0;
-        lastSeekDirection = direction;
-    }
-    
-    seekAccumulator += seconds;
-    
-    // Reset accumulator after inactivity
-    clearTimeout(seekResetTimeout);
-    seekResetTimeout = setTimeout(() => {
-        seekAccumulator = 0;
-        lastSeekDirection = 0;
-    }, 1500); // Match OSD timeout
-    
-    the_video_element.currentTime = Math.max(0, 
-        Math.min(the_video_element.duration, the_video_element.currentTime + seconds));
-    
-    updateControlsUI();
-    
-    // Show OSD in fullscreen
-    if (video_fullscreen) {
-        const text = (seekAccumulator > 0 ? "+" : "") + seekAccumulator + "s";
-        const icon = seekAccumulator > 0 ? 'forward' : 'backward';
-        const position = seekAccumulator > 0 ? 'right' : 'left';
-        showOSD(text, icon, position);
-    }
-}
-
-// Enable keyboard controls
-function enableKeyboardControls() {
-    // Create and store original keyboard event handler
-    if (!window._originalKeydownHandler) {
-        window._originalKeydownHandler = document.onkeydown;
-    }
-    
-    // Set new keyboard event handler
-    document.onkeydown = function(e) {
-        if (video_fullscreen && the_video_element) {
-            // Execute corresponding operations based on key presses
-            switch (e.key) {
-                case " ": // Space key
-                    togglePlayPause();
-                    e.preventDefault();
-                    break;
-                case "ArrowLeft": // Left arrow
-                    skipTime(-5);
-                    e.preventDefault();
-                    break;
-                case "ArrowRight": // Right arrow
-                    skipTime(5);
-                    e.preventDefault();
-                    break;
-                case "ArrowUp": // Up arrow
-                    adjustVolume(0.05);
-                    e.preventDefault();
-                    break;
-                case "ArrowDown": // Down arrow
-                    adjustVolume(-0.05);
-                    e.preventDefault();
-                    break;
-                case "Escape": // ESC key
-                    if (document.fullscreenElement) {
-                        document.exitFullscreen().catch(err => {
-                            console.error("Exit fullscreen failed:", err);
-                        });
-                    }
-                    e.preventDefault();
-                    break;
-            }
-        } else if (window._originalKeydownHandler) {
-            // If not in fullscreen mode, use the original event handler
-            return window._originalKeydownHandler.call(document, e);
-        }
-    };
-}
-
-// Restore original keyboard controls
-function disableKeyboardControls() {
-    // Restore original keyboard event handler
-    if (window._originalKeydownHandler) {
-        document.onkeydown = window._originalKeydownHandler;
-    } else {
-        document.onkeydown = null;
-    }
-}
-
-// New function to restore video element state
-function restoreVideoState() {
-    console.log("Starting to restore pre-fullscreen state");
-    
-    // First remove black background to avoid black screen
-    var blackBackground = document.getElementById("fullscreen_video_black_background");
-    if (blackBackground) {
-        blackBackground.remove();
-    }
-    
-    // Remove controls interface
-    var controls = document.getElementById("fullscreen_controls");
-    if (controls) {
-        controls.remove();
-    }
-    
-    // Remove OSD
-    var osd = document.getElementById("fullscreen_osd");
-    if (osd) {
-        osd.remove();
-    }
-    
-    // Reset error message (if exists)
-    var errorMessage = document.getElementById("fullscreen_error_message");
-    if (errorMessage) {
-        errorMessage.remove();
-    }
-    
-    // Disable keyboard controls
-    disableKeyboardControls();
-    
-    // Remove video click handler
-    if (the_video_element && window._videoClickHandler) {
-        the_video_element.removeEventListener('click', window._videoClickHandler);
-        window._videoClickHandler = null;
-    }
-    
-    // Clean up fullscreen control event handlers
-    if (window._fullscreenEventHandlers) {
-        const progressContainer = document.getElementById("progress_container");
-        const controls = document.getElementById("fullscreen_controls");
-        
-        if (progressContainer) {
-            if (window._fullscreenEventHandlers.progressClick) {
-                progressContainer.removeEventListener("click", window._fullscreenEventHandlers.progressClick);
-            }
-            if (window._fullscreenEventHandlers.progressMouseMove) {
-                progressContainer.removeEventListener("mousemove", window._fullscreenEventHandlers.progressMouseMove);
-            }
-            if (window._fullscreenEventHandlers.progressMouseEnter) {
-                progressContainer.removeEventListener("mouseenter", window._fullscreenEventHandlers.progressMouseEnter);
-            }
-            if (window._fullscreenEventHandlers.progressMouseLeave) {
-                progressContainer.removeEventListener("mouseleave", window._fullscreenEventHandlers.progressMouseLeave);
-            }
-        }
-        
-        if (window._fullscreenEventHandlers.controlsMouseMove) {
-            document.removeEventListener("mousemove", window._fullscreenEventHandlers.controlsMouseMove);
-        }
-        
-        if (controls && window._fullscreenEventHandlers.controlsMouseEnter) {
-            controls.removeEventListener("mouseenter", window._fullscreenEventHandlers.controlsMouseEnter);
-        }
-        
-        window._fullscreenEventHandlers = null;
-    }
-    
-    // Clear update interval
-    if (window._fullscreenUpdateInterval) {
-        clearInterval(window._fullscreenUpdateInterval);
-        window._fullscreenUpdateInterval = null;
-    }
-    
-    // Restore video element
-    if (the_video_element) {
-        // If original style information is saved, use it to restore
-        if (the_video_element._originalStyles) {
-            // If there's an original parent element, move the video element back to its original position
-            if (the_video_element._originalParent && the_video_element.parentNode !== the_video_element._originalParent) {
-                the_video_element._originalParent.appendChild(the_video_element);
-            }
-            
-            // First ensure the video element is visible
-            the_video_element.style.display = the_video_element._originalStyles.display || "block";
-            the_video_element.style.visibility = "visible";
-            the_video_element.style.opacity = "1";
-            
-            // Then restore original styles
-            the_video_element.style.position = the_video_element._originalStyles.position;
-            the_video_element.style.top = the_video_element._originalStyles.top;
-            the_video_element.style.left = the_video_element._originalStyles.left;
-            the_video_element.style.width = the_video_element._originalStyles.width;
-            the_video_element.style.height = the_video_element._originalStyles.height;
-            the_video_element.style.zIndex = the_video_element._originalStyles.zIndex;
-            
-            // Clear saved original information
-            delete the_video_element._originalStyles;
-            delete the_video_element._originalParent;
-        } else {
-            // Use empty string to reset styles (if no original styles saved)
-            the_video_element.style.position = "";
-            the_video_element.style.top = "";
-            the_video_element.style.left = "";
-            the_video_element.style.width = "";
-            the_video_element.style.height = "";
-            the_video_element.style.zIndex = "";
-            the_video_element.style.display = "block";
-        }
-    }
-    
-    // Reset other styles
-    document.documentElement.style.overflow = "";
-    document.getElementById("subtitle_element").style.zIndex = "";
-    
-    console.log("Fullscreen state restored to normal");
-    video_fullscreen = false;
-    
-    // Clear any existing timeout
-    if (window._fullscreenTimeout) {
-        clearTimeout(window._fullscreenTimeout);
-        window._fullscreenTimeout = null;
-    }
-}
-
-// Helper function to adjust video position when fullscreen fails
-function adjustVideoPosition() {
-    if (the_video_element == null) return;
-    
-    // Ensure that even when fullscreen fails, the video can be displayed in fixed positioning mode
-    the_video_element.style.position = "fixed";
-    the_video_element.style.top = "0px";
-    the_video_element.style.left = "0px";
-    the_video_element.style.width = "100%";
-    the_video_element.style.height = "100%";
-    the_video_element.style.zIndex = "99998";
-    the_video_element.style.display = "block";
-    the_video_element.style.visibility = "visible";
-    the_video_element.style.opacity = "1";
 }
 
 update_video_elements_list();
@@ -3334,6 +2467,14 @@ shadow_root.getElementById("subtitle_offset_input").addEventListener("input", fu
     subtitle_offset = parseFloat(shadow_root.getElementById("subtitle_offset_input").value);
 });
 
+// keep the TextTrack cue times in sync once the committed offset changes
+shadow_root.getElementById("subtitle_offset_input").addEventListener("change", function(){
+    subtitle_offset = parseFloat(shadow_root.getElementById("subtitle_offset_input").value);
+    extTrackCuesDirty = true;
+    if (extTrack) syncExternalCues(extTrack);
+    applySubtitleVisibility();
+});
+
 shadow_root.getElementById("subtitle_offset_top_input").addEventListener("input", function(){
     subtitle_offset_top = parseFloat(shadow_root.getElementById("subtitle_offset_top_input").value);
 });
@@ -3357,11 +2498,10 @@ shadow_root.getElementById("subtitle_font").addEventListener("input", function()
 shadow_root.getElementById("s2t_enabled").addEventListener("change", function(){
     chineseConverter.enabled = this.checked;
     chrome.storage.local.set({ s2t_enabled: this.checked });
+    extTrackCuesDirty = true;
+    if (extTrack) syncExternalCues(extTrack);
+    applySubtitleVisibility();
     updateConverterStatus();
-});
-
-shadow_root.getElementById("make_video_fullscreen").addEventListener("click", function(){
-    switch_fullscreen_video();
 });
 
 shadow_root.getElementById("close_button").addEventListener("click", function(){
@@ -3421,32 +2561,14 @@ setInterval(updateConverterStatus, 2000);
 // Initial update
 setTimeout(updateConverterStatus, 500);
 
-// Add smart fullscreen status monitoring
-setInterval(function() {
-    // Periodically check if fullscreen status is consistent
-    if (video_fullscreen) {
-        // If we think we're in fullscreen, but actually not in fullscreen state
-        if (!document.fullscreenElement) {
-            console.log("Detected user has exited fullscreen (possibly pressed ESC key), restoring normal state");
-            restoreVideoState();
-        }
-    }
-}, 2000); // Changed to check every 2 seconds, reduced frequency
-
-// Add fullscreen exit event listener
-document.addEventListener("fullscreenchange", function() {
-    if (!document.fullscreenElement && video_fullscreen) {
-        console.log("Fullscreen change event: User exited fullscreen");
-        
-        // Clear any existing timeout
-        if (window._fullscreenTimeout) {
-            clearTimeout(window._fullscreenTimeout);
-            window._fullscreenTimeout = null;
-        }
-        
-        // Use restore function to handle fullscreen exit
-        restoreVideoState();
-    }
+// Renderer switching for the site's own fullscreen: our DOM overlay cannot render
+// above the fullscreen top layer, so subtitles move onto a TextTrack (rendered
+// together with the video, keeping the site's native control bar fully usable).
+// Re-apply one frame later: some players flip track modes during their own
+// fullscreen setup, after this event fires.
+document.addEventListener("fullscreenchange", function(){
+    applySubtitleVisibility();
+    requestAnimationFrame(applySubtitleVisibility);
 });
 
 // ======= Online subtitle search logic =======
