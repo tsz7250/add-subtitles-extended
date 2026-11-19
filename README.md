@@ -75,4 +75,4 @@ After opening the frame in a new tab, click the extension icon again to detect t
 
 ## License
 
-This project is licensed under the MIT License. For details, please see the [LICENSE](LICENSE) file.
+This project is licensed under the GNU General Public License v3.0. For details, please see the [LICENSE](LICENSE) file.

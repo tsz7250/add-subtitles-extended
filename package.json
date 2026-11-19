@@ -3,6 +3,7 @@
   "version": "1.68.0",
   "private": true,
   "description": "Build packages for the Add Subtitles browser extension.",
+  "license": "GPL-3.0-or-later",
   "scripts": {
     "pack": "node scripts/pack.js",
     "build": "webpack && node scripts/pack.js",
