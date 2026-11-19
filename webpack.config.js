@@ -1,5 +1,6 @@
 const path = require('path');
 const CopyPlugin = require('copy-webpack-plugin');
+const { Compilation, sources } = require('webpack');
 
 // [reason] libarchive.js resolves its wasm via `new URL("libarchive.wasm", import.meta.url)`,
 // which breaks when the worker is spawned from a blob URL (content scripts cannot
@@ -8,6 +9,44 @@ const CopyPlugin = require('copy-webpack-plugin');
 // String is from libarchive.js 2.0.2 dist; re-check after upgrading the package.
 const WASM_URL_TARGET = 'N=new URL("libarchive.wasm",import.meta.url).href';
 const WASM_URL_PATCHED = 'N=self.__libarchiveWasmUrl||new URL("libarchive.wasm",import.meta.url).href';
+// Firefox rejects these unreachable fallbacks during static validation.
+// Exact strings intentionally make dependency or webpack upgrades fail loudly.
+const JSZIP_FUNCTION_TARGET = 'e=new Function(""+e)';
+const JSZIP_FUNCTION_PATCHED = '(()=>{throw new TypeError("setImmediate callback must be a function")})()';
+const WEBPACK_FUNCTION_TARGET = 'this||new Function("return this")()';
+const WEBPACK_FUNCTION_PATCHED = 'globalThis';
+
+class RemoveDynamicCodePlugin {
+    apply(compiler) {
+        compiler.hooks.thisCompilation.tap('RemoveDynamicCodePlugin', (compilation) => {
+            compilation.hooks.processAssets.tap(
+                {
+                    name: 'RemoveDynamicCodePlugin',
+                    stage: Compilation.PROCESS_ASSETS_STAGE_OPTIMIZE_SIZE + 1,
+                },
+                (assets) => {
+                    const assetName = 'content_scripts/add_subtitles.js';
+                    let patched = assets[assetName].source().toString();
+                    for (const [name, target, replacement] of [
+                        ['jszip', JSZIP_FUNCTION_TARGET, JSZIP_FUNCTION_PATCHED],
+                        ['webpack', WEBPACK_FUNCTION_TARGET, WEBPACK_FUNCTION_PATCHED],
+                    ]) {
+                        const matches = patched.split(target).length - 1;
+                        if (matches !== 1) {
+                            throw new Error(`Expected one ${name} Function constructor, found ${matches}.`);
+                        }
+                        patched = patched.replace(target, replacement);
+                    }
+
+                    if (/\beval\s*\(|(?:new\s+)?Function\s*\(/.test(patched)) {
+                        throw new Error(`Dynamic code remains in ${assetName}.`);
+                    }
+                    compilation.updateAsset(assetName, new sources.RawSource(patched));
+                }
+            );
+        });
+    }
+}
 
 module.exports = {
     mode: 'production',
@@ -28,6 +67,7 @@ module.exports = {
         runtimeChunk: false,
     },
     plugins: [
+        new RemoveDynamicCodePlugin(),
         new CopyPlugin({
             patterns: [
                 {
