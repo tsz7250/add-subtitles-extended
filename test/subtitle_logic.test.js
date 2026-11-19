@@ -10,8 +10,20 @@ const {
     compareEpisodes,
     shortenPaths,
     groupByEpisode,
+    archivePathLabel,
+    hasSubhdEpisodeLayer,
+    subhdEpisodeSortKey,
+    subhdTitleForQuery,
+    subhdLabel,
+    subhdCountText,
+    subhdLanguageMatch,
+    subhdLanguageLabel,
+    getPagedResults,
+    runArchiveSelection,
+    buildPickerBaseSegments,
     getDownloadCacheKey,
-    hasUsableSubtitleFormat
+    hasUsableSubtitleFormat,
+    parseSubtitleColor
 } = require('../src/subtitle_logic');
 
 test('shows external subtitles only when enabled, loaded, and bound to a video', () => {
@@ -185,4 +197,153 @@ test('groupByEpisode keeps archive order within a group', () => {
     const groups = groupByEpisode(entries);
     assert.equal(groups[0].items[0].path, 'Show.S01E01.CHS.ass');
     assert.equal(groups[0].items[1].path, 'Show.S01E01.CHT.ass');
+});
+
+test('archivePathLabel truncates long names and keeps the full tooltip', () => {
+    assert.deepEqual(archivePathLabel('short.zip'), { label: 'short.zip', title: 'short.zip' });
+    assert.deepEqual(archivePathLabel(null), { label: '壓縮檔', title: '壓縮檔' });
+    const long = '[全剧合集] VisionQuest.S01.1080p';
+    const label = archivePathLabel(long);
+    assert.equal(label.label, '[全剧合集] VisionQuest…');
+    assert.equal(label.title, long);
+});
+
+test('hasSubhdEpisodeLayer preserves the single-group shortcut', () => {
+    assert.equal(hasSubhdEpisodeLayer([{ episode: '' }]), false);
+    assert.equal(hasSubhdEpisodeLayer([{ episode: '合集' }, { episode: '合集' }]), false);
+    assert.equal(hasSubhdEpisodeLayer([{ episode: '第 1 集' }, { episode: '第 2 集' }]), true);
+    assert.equal(hasSubhdEpisodeLayer([{ episode: '第 1 集' }, { episode: '合集' }]), true);
+});
+
+test('subhdEpisodeSortKey puts 合集 before episodes and unlabeled last', () => {
+    assert.ok(subhdEpisodeSortKey('合集') < subhdEpisodeSortKey('第 1 集'));
+    assert.ok(subhdEpisodeSortKey('合集 1-12') < subhdEpisodeSortKey('第 1 集'));
+    assert.ok(subhdEpisodeSortKey('第 2 集') < subhdEpisodeSortKey('第 10 集'));
+    assert.equal(subhdEpisodeSortKey('未分集'), Number.POSITIVE_INFINITY);
+});
+
+test('subhdTitleForQuery follows the query language and falls back safely', () => {
+    assert.equal(subhdTitleForQuery('盗梦空间', '盗梦空间 Inception', 'Inception'), 'Inception');
+    assert.equal(subhdTitleForQuery('盗梦空间', '盗梦空间 Inception', '盗梦空间'), '盗梦空间');
+    assert.equal(subhdTitleForQuery('盗梦空间', '盗梦空间', 'Inception'), '盗梦空间');
+    assert.equal(subhdTitleForQuery('盗梦空间', '盗梦空间《Inception》', 'Inception'), 'Inception');
+    assert.equal(subhdTitleForQuery('', '盗梦空间 Inception', 'Inception'), 'Inception');
+    assert.equal(subhdTitleForQuery('', '', 'Inception'), '');
+});
+
+test('subhdLabel translates episode labels only for non-Chinese queries', () => {
+    assert.equal(subhdLabel('第 6 集', 'Breaking Bad'), 'Episode 6');
+    assert.equal(subhdLabel('合集', 'Breaking Bad'), 'Collection');
+    assert.equal(subhdLabel('合集 1-12', 'Breaking Bad'), 'Collection 1-12');
+    assert.equal(subhdLabel('全部集數', 'Breaking Bad'), 'All episodes');
+    assert.equal(subhdLabel('全部字幕', 'Breaking Bad'), 'All subtitles');
+    assert.equal(subhdLabel('未分集', 'Breaking Bad'), 'Unlabeled');
+    assert.equal(subhdLabel('其他標籤', 'Breaking Bad'), '其他標籤');
+    assert.equal(subhdLabel('第 6 集', '绝命毒师'), '第 6 集');
+    assert.equal(subhdLabel('合集', '绝命毒师'), '合集');
+});
+
+test('subhdCountText uses Chinese units for Chinese queries and plurals otherwise', () => {
+    assert.equal(subhdCountText(12, '绝命毒师'), '12 筆');
+    assert.equal(subhdCountText(12, 'Breaking Bad'), '12 subtitles');
+    assert.equal(subhdCountText(1, 'Breaking Bad'), '1 subtitle');
+});
+
+test('subhdLanguageMatch maps SubHD language tags to filter options', () => {
+    assert.equal(subhdLanguageMatch(['双语', '简体', '英语'], 'all'), true);
+    assert.equal(subhdLanguageMatch(['双语', '简体', '英语'], 'zh-hans'), true);
+    assert.equal(subhdLanguageMatch(['双语', '简体', '英语'], 'zh-hant'), true);
+    assert.equal(subhdLanguageMatch(['双语', '简体', '英语'], 'en'), true);
+    assert.equal(subhdLanguageMatch(['繁体'], 'zh-hant'), true);
+    assert.equal(subhdLanguageMatch(['繁体'], 'zh-hans'), false);
+    assert.equal(subhdLanguageMatch(['繁体'], 'en'), false);
+    assert.equal(subhdLanguageMatch(['简体'], 'zh-hans'), true);
+    assert.equal(subhdLanguageMatch(['简体'], 'zh-hant'), false);
+    assert.equal(subhdLanguageMatch(['简体'], 'en'), false);
+    assert.equal(subhdLanguageMatch(['英语'], 'en'), true);
+    assert.equal(subhdLanguageMatch(['英语'], 'zh-hans'), false);
+    assert.equal(subhdLanguageMatch(['其它'], 'en'), false);
+    assert.equal(subhdLanguageMatch([], 'all'), true);
+    assert.equal(subhdLanguageMatch([], 'zh-hans'), false);
+});
+
+test('subhdLanguageLabel maps SubHD tags to display labels', () => {
+    assert.equal(subhdLanguageLabel('简体'), '简体');
+    assert.equal(subhdLanguageLabel('繁体'), '繁體');
+    assert.equal(subhdLanguageLabel('双语'), '雙語');
+    assert.equal(subhdLanguageLabel('英语'), 'English');
+    assert.equal(subhdLanguageLabel('其它'), '其它');
+    assert.equal(subhdLanguageLabel(''), '');
+});
+
+test('getPagedResults returns a safe page and stable slices', () => {
+    const rows = Array.from({ length: 65 }, (_, i) => i + 1);
+    assert.deepEqual(getPagedResults(rows, 0, 30), { page: 1, items: rows.slice(0, 30) });
+    assert.deepEqual(getPagedResults(rows, 2, 30), { page: 2, items: rows.slice(30, 60) });
+    assert.deepEqual(getPagedResults(rows, 3, 30), { page: 3, items: rows.slice(60) });
+});
+
+test('runArchiveSelection always hides progress', async () => {
+    let hides = 0;
+    const progress = { hide() { hides++; } };
+    assert.equal(await runArchiveSelection('ok', progress, async item => item), 'ok');
+    await assert.rejects(runArchiveSelection('bad', progress, async () => {
+        throw new Error('parse failed');
+    }), /parse failed/);
+    assert.equal(hides, 2);
+});
+
+test('buildPickerBaseSegments leaves then runs each original callback', () => {
+    const calls = [];
+    const segments = buildPickerBaseSegments([
+        { label: 'SubHD', on_click() { calls.push('subhd'); } },
+        { label: '作品', on_click() { calls.push('title'); } },
+        { label: '第 8 集' }
+    ], () => calls.push('leave'));
+    segments[0].on_click();
+    segments[1].on_click();
+    segments[2].on_click();
+    assert.deepEqual(calls, ['leave', 'subhd', 'leave', 'title', 'leave']);
+});
+
+test('buildPickerBaseSegments leaves unavailable ancestors inert', () => {
+    let leaves = 0;
+    const segments = buildPickerBaseSegments([
+        { label: 'SubHD' },
+        { label: '目前字幕' }
+    ], () => leaves++);
+    assert.equal(segments[0].on_click, null);
+    segments[1].on_click();
+    assert.equal(leaves, 1);
+});
+
+test('parseSubtitleColor normalizes HEX and RGB(A) values', () => {
+    assert.deepEqual(parseSubtitleColor('#fff'), {
+        hex: '#ffffff',
+        alpha: 1,
+        rgba: 'rgba(255, 255, 255, 1)'
+    });
+    assert.deepEqual(parseSubtitleColor('#000000b3'), {
+        hex: '#000000',
+        alpha: 0.702,
+        rgba: 'rgba(0, 0, 0, 0.702)'
+    });
+    assert.deepEqual(parseSubtitleColor('rgb(12, 34, 56)'), {
+        hex: '#0c2238',
+        alpha: 1,
+        rgba: 'rgba(12, 34, 56, 1)'
+    });
+    assert.deepEqual(parseSubtitleColor('rgba(12, 34, 56, 0.25)'), {
+        hex: '#0c2238',
+        alpha: 0.25,
+        rgba: 'rgba(12, 34, 56, 0.25)'
+    });
+});
+
+test('parseSubtitleColor rejects unsupported or out-of-range values', () => {
+    assert.equal(parseSubtitleColor('red'), null);
+    assert.equal(parseSubtitleColor('hsl(0 0% 0%)'), null);
+    assert.equal(parseSubtitleColor('rgb(256, 0, 0)'), null);
+    assert.equal(parseSubtitleColor('rgba(0, 0, 0, 1.1)'), null);
+    assert.equal(parseSubtitleColor(''), null);
 });

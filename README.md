@@ -8,9 +8,9 @@ A simple yet powerful Firefox and Chrome browser extension that lets you add ext
 | :---: |
 | ![Video Preview](assets/screenshots/screen.png) |
 
-| Main Panel | Search Panel | Settings Panel |
+| Load Panel | Search Panel | Settings Panel |
 | :---: | :---: | :---: |
-| ![Main Panel](assets/screenshots/panel_main.png) | ![Search Panel](assets/screenshots/panel_search.png) | ![Settings Panel](assets/screenshots/panel_setting.png) |
+| ![Load Panel](assets/screenshots/panel_main.png) | ![Search Panel](assets/screenshots/panel_search.png) | ![Settings Panel](assets/screenshots/panel_setting.png) |
 
 ## Project Overview
 This project is a repaired and enhanced version based on the original add-subtitles extension. Major improvements include:
@@ -52,7 +52,7 @@ Prerequisites: [Node.js](https://nodejs.org/) and npm.
 4. Or switch to the **Search** tab to find and load subtitles online (set API keys in **Settings** first for OpenSubtitles/assrt; SubHD needs no key).
 5. Adjust the subtitle settings (optional).
 6. Use the player's own fullscreen button — the subtitles follow the video, and the player's original control bar (quality, speed, audio tracks) stays fully usable.
-7. Toggle **Show external subtitles** on the Main tab to show or hide the subtitles at any time.
+7. Toggle **Show external subtitles** on the **Load** tab to show or hide the subtitles at any time.
 
 ### Fullscreen behavior
 
@@ -60,7 +60,7 @@ The extension keeps the site's own fullscreen and control bar working by selecti
 
 - When the `<video>` element itself enters fullscreen, the extension creates a native `External Subtitles` text track on demand and uses the browser/system caption appearance.
 - When a player container enters fullscreen, subtitles use a non-interactive DOM overlay inside that container so players that suppress native text tracks still work.
-- In windowed playback, subtitles use the same custom appearance settings under **Settings → Custom subtitle appearance** (position, font, size, colors).
+- In windowed playback, subtitles use the same custom appearance settings under **Settings → Subtitle appearance** (position, font, size, colors).
 - The time offset and the Simplified-to-Traditional conversion apply in both modes.
 - Turn off the site's own subtitles manually if both subtitle sets are visible; the extension does not modify the player's subtitle state.
 

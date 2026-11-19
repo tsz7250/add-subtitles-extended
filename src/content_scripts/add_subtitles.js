@@ -8,11 +8,31 @@ const {
     findReplacementVideo,
     getCueSyncError,
     groupByEpisode,
+    archivePathLabel,
+    hasSubhdEpisodeLayer,
+    subhdEpisodeSortKey,
+    subhdTitleForQuery,
+    subhdLabel,
+    subhdCountText,
+    subhdLanguageMatch,
+    subhdLanguageLabel,
+    getPagedResults,
+    runArchiveSelection,
+    buildPickerBaseSegments,
     getDownloadCacheKey,
     hasUsableSubtitleFormat,
+    parseSubtitleColor,
     SUBTITLE_FORMATS
 } = require('../subtitle_logic');
 const { SUBHD_MIRRORS } = require('../subhd_config');
+const {
+    createSearchState,
+    captureSearchView,
+    restoreSearchView,
+    resetSubhdState,
+    isLanguageOnlyChange,
+    findSearchCandidate
+} = require('../search_state');
 
 (function(){
 
@@ -138,14 +158,19 @@ class FileValidator {
 
 // Added: Progress indicator class
 class ProgressIndicator {
-    constructor(container) {
+    constructor(container, blockTarget) {
         this.container = container;
+        this.blockTarget = blockTarget || null;
         this.progressElement = null;
     }
     
     show(message = 'Loading...') {
         if (this.progressElement) {
             this.hide();
+        }
+        if (this.blockTarget) {
+            this.blockTarget.inert = true;
+            this.blockTarget.setAttribute('aria-busy', 'true');
         }
         
         this.progressElement = document.createElement('div');
@@ -159,12 +184,15 @@ class ProgressIndicator {
         
         // Create progress bar container
         const loadingBar = document.createElement('div');
-        loadingBar.className = 'loading-bar';
+        loadingBar.className = 'loading-bar indeterminate';
+        loadingBar.setAttribute('role', 'progressbar');
+        loadingBar.setAttribute('aria-valuemin', '0');
+        loadingBar.setAttribute('aria-valuemax', '100');
+        loadingBar.setAttribute('aria-valuenow', '0');
         
         // Create progress bar fill element
         const loadingFill = document.createElement('div');
         loadingFill.className = 'loading-fill';
-        loadingFill.style.width = '0%';
         loadingBar.appendChild(loadingFill);
         
         this.progressElement.appendChild(loadingBar);
@@ -176,13 +204,21 @@ class ProgressIndicator {
         if (!this.progressElement) return;
         
         const fill = this.progressElement.querySelector('.loading-fill');
+        const bar = this.progressElement.querySelector('.loading-bar');
         const messageEl = this.progressElement.querySelector('.loading-message');
+        const safePercent = Math.min(100, Math.max(0, percent));
         
-        if (fill) fill.style.width = `${Math.min(100, Math.max(0, percent))}%`;
-        if (message && messageEl) messageEl.textContent = message;
+        if (bar) bar.classList.remove('indeterminate');
+        if (fill) fill.style.width = `${safePercent}%`;
+        if (bar) bar.setAttribute('aria-valuenow', String(Math.round(safePercent)));
+        if (message && messageEl) messageEl.textContent = `${message} · ${Math.round(safePercent)}%`;
     }
     
     hide() {
+        if (this.blockTarget) {
+            this.blockTarget.inert = false;
+            this.blockTarget.removeAttribute('aria-busy');
+        }
         if (this.progressElement) {
             this.progressElement.remove();
             this.progressElement = null;
@@ -208,6 +244,8 @@ menu.id = "addsubtitle_menu";
 // Use DOM methods instead of innerHTML
 const closeButton = document.createElement("button");
 closeButton.id = "close_button";
+closeButton.type = "button";
+closeButton.setAttribute("aria-label", "Close subtitle controls");
 // SVG Icon for close button
 const closeSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
 closeSvg.setAttribute("width", "24");
@@ -243,15 +281,22 @@ function activate_tab(name){
     for (const key in tab_pages) {
         tab_pages[key].style.display = key === name ? "block" : "none";
         tab_buttons[key].classList.toggle("active", key === name);
+        tab_buttons[key].setAttribute("aria-selected", key === name ? "true" : "false");
+        tab_buttons[key].tabIndex = key === name ? 0 : -1;
     }
     requestAnimationFrame(sync_tab_heights);
 }
 const tab_bar = document.createElement("div");
 tab_bar.id = "tab_bar";
+tab_bar.setAttribute("role", "tablist");
+tab_bar.setAttribute("aria-label", "Subtitle controls");
 menu.appendChild(tab_bar);
-[["main", "Main"], ["search", "Search"], ["settings", "Settings"]].forEach(function(pair){
+[["main", "Load"], ["search", "Search"], ["settings", "Settings"]].forEach(function(pair){
     const btn = document.createElement("button");
     btn.type = "button";
+    btn.id = "tab_" + pair[0];
+    btn.setAttribute("role", "tab");
+    btn.setAttribute("aria-controls", "page_" + pair[0]);
     btn.textContent = pair[1];
     btn.addEventListener("click", function(){ activate_tab(pair[0]); });
     tab_buttons[pair[0]] = btn;
@@ -259,8 +304,22 @@ menu.appendChild(tab_bar);
 
     const page = document.createElement("div");
     page.className = "tab_page";
+    page.id = "page_" + pair[0];
+    page.setAttribute("role", "tabpanel");
+    page.setAttribute("aria-labelledby", btn.id);
     tab_pages[pair[0]] = page;
     menu.appendChild(page);
+});
+tab_bar.addEventListener("keydown", function(event){
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    const names = Object.keys(tab_buttons);
+    const current = names.findIndex(name => tab_buttons[name] === shadow_root.activeElement);
+    if (current < 0) return;
+    event.preventDefault();
+    const step = event.key === "ArrowRight" ? 1 : -1;
+    const next = names[(current + step + names.length) % names.length];
+    activate_tab(next);
+    tab_buttons[next].focus();
 });
 activate_tab("main");
 
@@ -268,7 +327,10 @@ const tab_page_main = tab_pages.main;
 const tab_page_search = tab_pages.search;
 const tab_page_settings = tab_pages.settings;
 
-// Use the tallest page for all tabs so switching never resizes the panel.
+// the Search page owns the leftover panel height; its list scrolls instead
+tab_page_search.classList.add("search_page");
+
+// Use the tallest non-search page for all tabs so switching never resizes the panel.
 function sync_tab_heights(){
     const pages = Object.values(tab_pages);
     const visiblePage = pages.find(function(page){ return page.style.display !== "none"; });
@@ -276,6 +338,9 @@ function sync_tab_heights(){
     let maxHeight = 0;
 
     pages.forEach(function(page){
+        // [reason] search results stretch to fill the page; measuring their full
+        // content would grow the panel instead of letting the list scroll
+        if (page === tab_page_search) return;
         page.style.height = "";
         const hidden = page.style.display === "none";
         if (hidden) {
@@ -296,6 +361,11 @@ function sync_tab_heights(){
     });
 
     if (maxHeight > 0) {
+        // [reason] keep the page inside the panel's max-height (80vh, cap 600px)
+        // so the menu itself never scrolls and the Search header stays put
+        // shortcut: mirrors #addsubtitle_menu's max-height; update both together
+        const panelCap = Math.min(window.innerHeight * 0.8, 600) - (tab_bar.offsetHeight + 24);
+        if (panelCap > 0) maxHeight = Math.min(maxHeight, panelCap);
         pages.forEach(function(page){
             page.style.height = Math.ceil(maxHeight) + "px";
         });
@@ -303,14 +373,15 @@ function sync_tab_heights(){
 }
 
 const line = document.createElement("div");
-line.className = "line";
+line.className = "section_heading";
 
-const textNode = document.createTextNode("List of video elements: ");
-line.appendChild(textNode);
+const videoHeading = document.createElement("h2");
+videoHeading.textContent = "Video target";
+line.appendChild(videoHeading);
 
 const refreshButton = document.createElement("button");
 refreshButton.id = "refresh_video_list";
-refreshButton.textContent = "Refresh List";
+refreshButton.textContent = "Refresh";
 line.appendChild(refreshButton);
 
 tab_page_main.appendChild(line);
@@ -328,27 +399,34 @@ subtitle_file_fieldset.appendChild(legend);
 
 // Create first line: file upload
 const uploadFileLine = document.createElement("div");
-uploadFileLine.className = "line";
-uploadFileLine.appendChild(document.createTextNode("Upload file: "));
+uploadFileLine.className = "field";
 
 const fileInput = document.createElement("input");
 fileInput.type = "file";
 fileInput.accept = ".srt,.vtt,.ass,.ssa,.zip,.7z,.rar";
 fileInput.id = "subtitle_file_input";
 fileInput.autocomplete = "off";
+const fileLabel = document.createElement("label");
+fileLabel.htmlFor = fileInput.id;
+fileLabel.textContent = `Subtitle file (${FileValidator.SUPPORTED_FORMATS.concat(FileValidator.ARCHIVE_FORMATS).join(', ').toUpperCase()})`;
+uploadFileLine.appendChild(fileLabel);
 uploadFileLine.appendChild(fileInput);
 
 subtitle_file_fieldset.appendChild(uploadFileLine);
 
 // Create second line: URL input
 const urlLine = document.createElement("div");
-urlLine.className = "line";
-urlLine.appendChild(document.createTextNode("Or from URL (zip/7z/rar supported): "));
+urlLine.className = "field";
 
 const urlInput = document.createElement("input");
 urlInput.type = "text";
 urlInput.id = "subtitle_url_input";
 urlInput.autocomplete = "off";
+urlInput.placeholder = "https://example.com/subtitles.srt";
+const urlLabel = document.createElement("label");
+urlLabel.htmlFor = urlInput.id;
+urlLabel.textContent = "Or load from URL";
+urlLine.appendChild(urlLabel);
 urlLine.appendChild(urlInput);
 
 subtitle_file_fieldset.appendChild(urlLine);
@@ -382,6 +460,7 @@ buttonLine.appendChild(document.createTextNode(" "));
 
 const errorMessage = document.createElement("span");
 errorMessage.id = "upload_error_message";
+errorMessage.setAttribute("aria-live", "polite");
 buttonLine.appendChild(errorMessage);
 
 subtitle_file_fieldset.appendChild(buttonLine);
@@ -405,30 +484,38 @@ search_block.appendChild(search_hint);
 
 // Search input line
 const search_input_line = document.createElement("div");
-search_input_line.className = "line";
-search_input_line.appendChild(document.createTextNode("Search: "));
+search_input_line.className = "search_input_row";
 
 const search_query_input = document.createElement("input");
 search_query_input.type = "text";
 search_query_input.id = "search_query_input";
 search_query_input.autocomplete = "off";
 search_query_input.placeholder = "Movie or release name";
+search_query_input.setAttribute("aria-label", "Movie or release name");
 search_input_line.appendChild(search_query_input);
 
 const search_button = document.createElement("button");
 search_button.id = "search_button";
 search_button.textContent = "Search";
 search_input_line.appendChild(search_button);
+search_query_input.addEventListener("keydown", function(event){
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    search_button.click();
+});
 
 search_block.appendChild(search_input_line);
 
 // Provider + language line
 const search_provider_line = document.createElement("div");
-search_provider_line.className = "line";
-search_provider_line.appendChild(document.createTextNode("Provider: "));
+search_provider_line.className = "filter_row";
 
 const search_provider = document.createElement("select");
 search_provider.id = "search_provider";
+const providerLabel = document.createElement("label");
+providerLabel.htmlFor = search_provider.id;
+providerLabel.textContent = "Provider";
+search_provider_line.appendChild(providerLabel);
 [
     ["opensubtitles", "OpenSubtitles"],
     ["assrt", "Shooter (assrt.net)"],
@@ -441,10 +528,12 @@ search_provider.id = "search_provider";
 });
 search_provider_line.appendChild(search_provider);
 
-search_provider_line.appendChild(document.createTextNode(" Language: "));
-
 const search_language = document.createElement("select");
 search_language.id = "search_language";
+const languageLabel = document.createElement("label");
+languageLabel.htmlFor = search_language.id;
+languageLabel.textContent = "Language";
+search_provider_line.appendChild(languageLabel);
 // per-provider options: only languages each provider can actually filter
 const SEARCH_LANGS_ZH = [["all", "All"], ["en", "English"], ["zh-hans", "简体中文"], ["zh-hant", "繁體中文"]];
 const SEARCH_LANGS = {
@@ -466,41 +555,123 @@ search_provider_line.appendChild(search_language);
 
 search_block.appendChild(search_provider_line);
 
+const search_key_hint = document.createElement("div");
+search_key_hint.id = "search_key_hint";
+search_key_hint.className = "inline_hint";
+search_key_hint.hidden = true;
+search_key_hint.setAttribute("aria-live", "polite");
+const search_key_hint_text = document.createElement("span");
+const search_key_settings_button = document.createElement("button");
+search_key_settings_button.type = "button";
+search_key_settings_button.textContent = "Open Settings";
+search_key_hint.append(search_key_hint_text, search_key_settings_button);
+search_block.appendChild(search_key_hint);
+
+// Provider/title bar above the results (SubHD multi-title picker)
+const search_results_nav = document.createElement("div");
+search_results_nav.id = "search_results_nav";
+search_results_nav.className = "subtitle_path";
+search_block.appendChild(search_results_nav);
+
 // Results list (scrollable)
 const search_results = document.createElement("div");
 search_results.id = "search_results";
 search_block.appendChild(search_results);
 
+// Page links for the result list
+const search_pager = document.createElement("div");
+search_pager.id = "search_pager";
+search_block.appendChild(search_pager);
+
 // Status message
 const search_status_elem = document.createElement("span");
 search_status_elem.id = "search_status";
+search_status_elem.setAttribute("aria-live", "polite");
 search_block.appendChild(search_status_elem);
 
-// Progress container (reuses .loading-progress styles)
+// Progress overlay for the Search page (centered while a load runs)
 const search_progress_container = document.createElement("div");
 search_progress_container.id = "search_progress_container";
-search_block.appendChild(search_progress_container);
 
 // API key settings (live in the Settings tab, no collapsible wrapper)
 const os_key_line = document.createElement("div");
-os_key_line.className = "line";
-os_key_line.appendChild(document.createTextNode("OpenSubtitles API key: "));
+os_key_line.className = "field";
 const os_api_key_input = document.createElement("input");
 os_api_key_input.type = "password";
 os_api_key_input.id = "os_api_key";
 os_api_key_input.autocomplete = "off";
-os_key_line.appendChild(os_api_key_input);
+const osKeyLabel = document.createElement("label");
+osKeyLabel.htmlFor = os_api_key_input.id;
+osKeyLabel.textContent = "OpenSubtitles API key";
+const os_key_input_row = document.createElement("div");
+os_key_input_row.className = "secret_input_row";
+const os_key_visibility_button = document.createElement("button");
+os_key_visibility_button.type = "button";
+os_key_visibility_button.className = "secret_visibility_button";
+os_key_visibility_button.setAttribute("aria-label", "Show OpenSubtitles API key");
+os_key_visibility_button.setAttribute("aria-pressed", "false");
+os_key_input_row.append(os_api_key_input, os_key_visibility_button);
+os_key_line.appendChild(osKeyLabel);
+os_key_line.appendChild(os_key_input_row);
 tab_page_settings.appendChild(os_key_line);
 
 const assrt_key_line = document.createElement("div");
-assrt_key_line.className = "line";
-assrt_key_line.appendChild(document.createTextNode("assrt token: "));
+assrt_key_line.className = "field";
 const assrt_token_input = document.createElement("input");
 assrt_token_input.type = "password";
 assrt_token_input.id = "assrt_token";
 assrt_token_input.autocomplete = "off";
-assrt_key_line.appendChild(assrt_token_input);
+const assrtKeyLabel = document.createElement("label");
+assrtKeyLabel.htmlFor = assrt_token_input.id;
+assrtKeyLabel.textContent = "Shooter (assrt.net) token";
+const assrt_key_input_row = document.createElement("div");
+assrt_key_input_row.className = "secret_input_row";
+const assrt_key_visibility_button = document.createElement("button");
+assrt_key_visibility_button.type = "button";
+assrt_key_visibility_button.className = "secret_visibility_button";
+assrt_key_visibility_button.setAttribute("aria-label", "Show Shooter token");
+assrt_key_visibility_button.setAttribute("aria-pressed", "false");
+assrt_key_input_row.append(assrt_token_input, assrt_key_visibility_button);
+assrt_key_line.appendChild(assrtKeyLabel);
+assrt_key_line.appendChild(assrt_key_input_row);
 tab_page_settings.appendChild(assrt_key_line);
+
+function create_secret_visibility_icon(){
+    const namespace = "http://www.w3.org/2000/svg";
+    const icon = document.createElementNS(namespace, "svg");
+    icon.setAttribute("viewBox", "0 0 24 24");
+    icon.setAttribute("aria-hidden", "true");
+    icon.setAttribute("focusable", "false");
+    const eye = document.createElementNS(namespace, "path");
+    eye.setAttribute("d", "M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z");
+    const pupil = document.createElementNS(namespace, "circle");
+    pupil.setAttribute("cx", "12");
+    pupil.setAttribute("cy", "12");
+    pupil.setAttribute("r", "3");
+    const slash = document.createElementNS(namespace, "path");
+    slash.setAttribute("d", "M4 4 20 20");
+    slash.classList.add("secret_visibility_slash");
+    slash.style.display = "none";
+    icon.append(eye, pupil, slash);
+    return icon;
+}
+
+function bind_secret_visibility(input, button, label){
+    const slash = button.appendChild(create_secret_visibility_icon())
+        .querySelector(".secret_visibility_slash");
+    button.title = "Show " + label;
+    button.addEventListener("click", function(){
+        const visible = input.type === "password";
+        input.type = visible ? "text" : "password";
+        const action = (visible ? "Hide " : "Show ") + label;
+        slash.style.display = visible ? "" : "none";
+        button.title = action;
+        button.setAttribute("aria-label", action);
+        button.setAttribute("aria-pressed", visible ? "true" : "false");
+    });
+}
+bind_secret_visibility(os_api_key_input, os_key_visibility_button, "OpenSubtitles API key");
+bind_secret_visibility(assrt_token_input, assrt_key_visibility_button, "Shooter token");
 
 const keys_line = document.createElement("div");
 keys_line.className = "line";
@@ -515,81 +686,157 @@ tab_page_settings.appendChild(keys_line);
 
 // Simplified-to-Traditional conversion toggle (persisted in chrome.storage.local)
 const s2t_line = document.createElement("div");
-s2t_line.className = "line";
-s2t_line.appendChild(document.createTextNode("Simplified → Traditional (S2T): "));
+s2t_line.className = "toggle_row";
 var s2t_enabled_checkbox = document.createElement("input");
 s2t_enabled_checkbox.type = "checkbox";
 s2t_enabled_checkbox.id = "s2t_enabled";
+s2t_enabled_checkbox.className = "switch";
 s2t_enabled_checkbox.checked = true;
+const s2tLabel = document.createElement("label");
+s2tLabel.htmlFor = s2t_enabled_checkbox.id;
+s2tLabel.textContent = "Convert Simplified Chinese to Traditional";
+s2t_line.appendChild(s2tLabel);
 s2t_line.appendChild(s2t_enabled_checkbox);
 tab_page_settings.appendChild(s2t_line);
 
 tab_page_search.appendChild(search_block);
+tab_page_search.appendChild(search_progress_container);
 
 // Create grid container for settings
 const settingsGrid = document.createElement("div");
 settingsGrid.id = "settings_grid";
 
 var subtitle_offset_line = document.createElement("div");
-subtitle_offset_line.className = "line grid-item";
-subtitle_offset_line.appendChild(document.createTextNode("Time offset (s): "));
+subtitle_offset_line.className = "field grid-item";
 
 var subtitle_offset_input = document.createElement("input");
 subtitle_offset_input.type = "number";
 subtitle_offset_input.step = "0.01";
 subtitle_offset_input.id = "subtitle_offset_input";
 subtitle_offset_input.value = "0";
+const offsetLabel = document.createElement("label");
+offsetLabel.htmlFor = subtitle_offset_input.id;
+offsetLabel.textContent = "Time offset (seconds)";
+subtitle_offset_line.appendChild(offsetLabel);
 subtitle_offset_line.appendChild(subtitle_offset_input);
 
 var position_offset_line = document.createElement("div");
-position_offset_line.className = "line grid-item";
-position_offset_line.appendChild(document.createTextNode("Position offset (px): "));
+position_offset_line.className = "field grid-item";
 
 var subtitle_offset_top_input = document.createElement("input");
 subtitle_offset_top_input.type = "number";
 subtitle_offset_top_input.id = "subtitle_offset_top_input";
 subtitle_offset_top_input.value = "-100";
+const positionLabel = document.createElement("label");
+positionLabel.htmlFor = subtitle_offset_top_input.id;
+positionLabel.textContent = "Position offset (px)";
+position_offset_line.appendChild(positionLabel);
 position_offset_line.appendChild(subtitle_offset_top_input);
 
 var subtitle_font_size_line = document.createElement("div");
-subtitle_font_size_line.className = "line grid-item";
-subtitle_font_size_line.appendChild(document.createTextNode("Font size (px): "));
+subtitle_font_size_line.className = "field grid-item";
 
 var subtitle_font_size_input = document.createElement("input");
 subtitle_font_size_input.type = "number";
 subtitle_font_size_input.id = "subtitle_font_size";
 subtitle_font_size_input.value = "26";
+const fontSizeLabel = document.createElement("label");
+fontSizeLabel.htmlFor = subtitle_font_size_input.id;
+fontSizeLabel.textContent = "Font size (px)";
+subtitle_font_size_line.appendChild(fontSizeLabel);
 subtitle_font_size_line.appendChild(subtitle_font_size_input);
 
 var subtitle_font_line = document.createElement("div");
-subtitle_font_line.className = "line grid-item";
-subtitle_font_line.appendChild(document.createTextNode("Font: "));
+subtitle_font_line.className = "field grid-item";
 
-var subtitle_font_input = document.createElement("input");
-subtitle_font_input.type = "text";
+var subtitle_font_input = document.createElement("select");
 subtitle_font_input.id = "subtitle_font";
+[
+    ["system-ui, -apple-system, sans-serif", "System Sans"],
+    ["Arial", "Arial"],
+    ["serif", "Serif"],
+    ["monospace", "Monospace"],
+    ["custom", "Custom"]
+].forEach(function(pair){
+    const option = document.createElement("option");
+    option.value = pair[0];
+    option.textContent = pair[1];
+    subtitle_font_input.appendChild(option);
+});
 subtitle_font_input.value = "Arial";
+const fontLabel = document.createElement("label");
+fontLabel.htmlFor = subtitle_font_input.id;
+fontLabel.textContent = "Font";
+subtitle_font_line.appendChild(fontLabel);
 subtitle_font_line.appendChild(subtitle_font_input);
 
-var subtitle_font_color_line = document.createElement("div");
-subtitle_font_color_line.className = "line grid-item";
-subtitle_font_color_line.appendChild(document.createTextNode("Font color: "));
+const custom_font_input = document.createElement("input");
+custom_font_input.type = "text";
+custom_font_input.id = "subtitle_custom_font";
+custom_font_input.placeholder = "Installed font name";
+custom_font_input.style.display = "none";
+custom_font_input.setAttribute("aria-label", "Custom font name");
+subtitle_font_line.appendChild(custom_font_input);
 
-var subtitle_font_color_input = document.createElement("input");
-subtitle_font_color_input.type = "text";
-subtitle_font_color_input.id = "subtitle_font_color";
-subtitle_font_color_input.value = "rgba(255, 255, 255, 1)";
-subtitle_font_color_line.appendChild(subtitle_font_color_input);
+function create_color_field(id, labelText, initialValue){
+    const field = document.createElement("div");
+    field.className = "field color_field grid-item";
+    const label = document.createElement("label");
+    label.htmlFor = id + "_picker";
+    label.textContent = labelText;
+    field.appendChild(label);
 
-var subtitle_background_color_line = document.createElement("div");
-subtitle_background_color_line.className = "line grid-item";
-subtitle_background_color_line.appendChild(document.createTextNode("Background color: "));
+    const controls = document.createElement("div");
+    controls.className = "color_controls";
+    const picker = document.createElement("input");
+    picker.type = "color";
+    picker.id = id + "_picker";
+    const parsed = parseSubtitleColor(initialValue);
+    picker.value = parsed.hex;
+    controls.appendChild(picker);
 
-var subtitle_background_color_input = document.createElement("input");
-subtitle_background_color_input.type = "text";
-subtitle_background_color_input.id = "subtitle_background_color";
-subtitle_background_color_input.value = "rgba(0, 0, 0, 0.7)";
-subtitle_background_color_line.appendChild(subtitle_background_color_input);
+    const alpha = document.createElement("input");
+    alpha.type = "range";
+    alpha.id = id + "_alpha";
+    alpha.min = "0";
+    alpha.max = "100";
+    alpha.value = String(Math.round(parsed.alpha * 100));
+    alpha.setAttribute("aria-label", labelText + " opacity");
+    controls.appendChild(alpha);
+
+    const alphaValue = document.createElement("output");
+    alphaValue.htmlFor = alpha.id;
+    alphaValue.textContent = alpha.value + "%";
+    controls.appendChild(alphaValue);
+    field.appendChild(controls);
+
+    const details = document.createElement("details");
+    details.className = "advanced_color";
+    const summary = document.createElement("summary");
+    summary.textContent = "Advanced color value";
+    details.appendChild(summary);
+    const text = document.createElement("input");
+    text.type = "text";
+    text.id = id;
+    text.value = parsed.rgba;
+    text.setAttribute("aria-describedby", id + "_error");
+    details.appendChild(text);
+    const error = document.createElement("span");
+    error.id = id + "_error";
+    error.className = "field_error";
+    error.setAttribute("aria-live", "polite");
+    details.appendChild(error);
+    field.appendChild(details);
+    return { field, picker, alpha, alphaValue, text, error };
+}
+
+const fontColorControl = create_color_field("subtitle_font_color", "Text color", "rgba(255, 255, 255, 1)");
+var subtitle_font_color_line = fontColorControl.field;
+var subtitle_font_color_input = fontColorControl.text;
+
+const backgroundColorControl = create_color_field("subtitle_background_color", "Background color", "rgba(0, 0, 0, 0.7)");
+var subtitle_background_color_line = backgroundColorControl.field;
+var subtitle_background_color_input = backgroundColorControl.text;
 
 settingsGrid.appendChild(subtitle_offset_line);
 
@@ -597,12 +844,16 @@ tab_page_main.appendChild(settingsGrid);
 
 // Show/hide the external subtitles (DOM overlay in windowed mode, TextTrack in fullscreen)
 const showSubsLine = document.createElement("div");
-showSubsLine.className = "line";
-showSubsLine.appendChild(document.createTextNode("Show external subtitles: "));
+showSubsLine.className = "toggle_row";
 var showExternalCheckbox = document.createElement("input");
 showExternalCheckbox.type = "checkbox";
 showExternalCheckbox.id = "show_external_subtitles";
+showExternalCheckbox.className = "switch";
 showExternalCheckbox.checked = true;
+const showSubsLabel = document.createElement("label");
+showSubsLabel.htmlFor = showExternalCheckbox.id;
+showSubsLabel.textContent = "Show external subtitles";
+showSubsLine.appendChild(showSubsLabel);
 showSubsLine.appendChild(showExternalCheckbox);
 tab_page_main.appendChild(showSubsLine);
 showExternalCheckbox.addEventListener("change", applySubtitleVisibility);
@@ -610,8 +861,9 @@ showExternalCheckbox.addEventListener("change", applySubtitleVisibility);
 // Low-frequency appearance controls live in Settings so the Main tab stays compact
 const appearanceFieldset = document.createElement("fieldset");
 appearanceFieldset.id = "appearance_fieldset";
+appearanceFieldset.className = "settings_group";
 const appearanceLegend = document.createElement("legend");
-appearanceLegend.appendChild(document.createTextNode("Custom subtitle appearance "));
+appearanceLegend.appendChild(document.createTextNode("Subtitle appearance "));
 const appearanceInfoBtn = document.createElement("button");
 appearanceInfoBtn.id = "appearance_info_btn";
 appearanceInfoBtn.type = "button";
@@ -656,9 +908,17 @@ document.addEventListener("click", function(){
     window.addEventListener(type, function(e){
         if (typeof e.composedPath !== "function" ||
             e.composedPath().indexOf(menu) === -1) return;
-        if (type === "keydown" && e.key === "Escape" &&
-            appearanceInfoPopover.style.display !== "none") {
-            appearanceInfoPopover.style.display = "none";
+        if (type === "keydown" && e.key === "Escape") {
+            if (appearanceInfoPopover.style.display !== "none") {
+                appearanceInfoPopover.style.display = "none";
+            } else if (!resetConfirmation.hidden) {
+                resetConfirmation.hidden = true;
+            } else {
+                const openDetails = menu.querySelector("details[open]");
+                if (openDetails) openDetails.open = false;
+                else menu.style.display = "none";
+            }
+            e.preventDefault();
         }
         e.stopImmediatePropagation();
     }, true);
@@ -666,21 +926,19 @@ document.addEventListener("click", function(){
 
 // Add Simplified/Traditional Chinese conversion status display
 var converter_status_line = document.createElement("div");
-converter_status_line.className = "line";
+converter_status_line.className = "status_row";
 converter_status_line.id = "converter_status_line";
-converter_status_line.appendChild(document.createTextNode("Converter Status: "));
 
 var converter_status_span = document.createElement("span");
 converter_status_span.id = "converter_status";
 converter_status_span.textContent = "Initializing...";
-converter_status_span.style.color = "orange";
+converter_status_span.style.color = "#9a5b00";
 converter_status_line.appendChild(converter_status_span);
 
 // Add manual reload button
 var reload_converter_button = document.createElement("button");
 reload_converter_button.id = "reload_converter";
 reload_converter_button.textContent = "Reload Converter";
-reload_converter_button.style.marginLeft = "10px";
 converter_status_line.appendChild(reload_converter_button);
 
 // Add donate button
@@ -694,6 +952,77 @@ donate_button.addEventListener("click", function() {
 converter_status_line.appendChild(donate_button);
 
 tab_page_settings.appendChild(converter_status_line);
+
+function create_settings_group(title){
+    const group = document.createElement("fieldset");
+    group.className = "settings_group";
+    const groupLegend = document.createElement("legend");
+    groupLegend.textContent = title;
+    group.appendChild(groupLegend);
+    return group;
+}
+
+const videoSection = document.createElement("section");
+videoSection.className = "panel_section";
+videoSection.appendChild(line);
+videoSection.appendChild(video_elements_list);
+
+legend.textContent = "Load subtitles";
+subtitle_file_fieldset.className = "panel_section";
+
+const playbackSection = document.createElement("section");
+playbackSection.className = "panel_section";
+const playbackHeading = document.createElement("h2");
+playbackHeading.textContent = "Playback";
+playbackSection.appendChild(playbackHeading);
+playbackSection.appendChild(settingsGrid);
+playbackSection.appendChild(showSubsLine);
+tab_page_main.replaceChildren(videoSection, subtitle_file_fieldset, playbackSection);
+
+const resetAppearanceButton = document.createElement("button");
+resetAppearanceButton.type = "button";
+resetAppearanceButton.id = "reset_appearance";
+resetAppearanceButton.className = "quiet_button";
+resetAppearanceButton.textContent = "Reset to defaults";
+appearanceFieldset.appendChild(resetAppearanceButton);
+
+const resetConfirmation = document.createElement("div");
+resetConfirmation.id = "reset_appearance_confirmation";
+resetConfirmation.className = "inline_confirmation";
+resetConfirmation.hidden = true;
+const resetText = document.createElement("span");
+resetText.textContent = "Reset all subtitle appearance settings?";
+const cancelResetButton = document.createElement("button");
+cancelResetButton.type = "button";
+cancelResetButton.textContent = "Cancel";
+const confirmResetButton = document.createElement("button");
+confirmResetButton.type = "button";
+confirmResetButton.className = "danger_button";
+confirmResetButton.textContent = "Reset";
+resetConfirmation.append(resetText, cancelResetButton, confirmResetButton);
+appearanceFieldset.appendChild(resetConfirmation);
+
+const conversionRow = document.createElement("div");
+conversionRow.className = "conversion_row";
+conversionRow.append(s2t_line, converter_status_line);
+
+const servicesSection = create_settings_group("Subtitle services");
+servicesSection.id = "subtitle_services";
+keys_status_elem.setAttribute("aria-live", "polite");
+const servicesKeys = document.createElement("div");
+servicesKeys.className = "services_keys";
+servicesKeys.append(os_key_line, assrt_key_line);
+servicesSection.append(conversionRow, servicesKeys, keys_line);
+
+const settingsFooter = document.createElement("div");
+settingsFooter.className = "settings_footer";
+settingsFooter.append(donate_button);
+
+const settingsLayout = document.createElement("div");
+settingsLayout.className = "settings_layout";
+settingsLayout.append(appearanceFieldset, servicesSection, settingsFooter);
+
+tab_page_settings.replaceChildren(settingsLayout);
 
 shadow.appendChild(menu);
 
@@ -839,6 +1168,50 @@ input[type="checkbox"] {
     accent-color: #4CAF50;
 }
 
+/* Native checkbox kept for semantics; only the painted control becomes a switch */
+input[type="checkbox"].switch {
+    appearance: none;
+    -webkit-appearance: none;
+    position: relative;
+    flex: 0 0 auto;
+    width: 36px;
+    height: 20px;
+    padding: 0;
+    margin: 0;
+    border: 1px solid #bbb;
+    border-radius: 999px;
+    background-color: #ccc;
+    cursor: pointer;
+    transition: background-color 0.2s ease, border-color 0.2s ease;
+}
+
+input[type="checkbox"].switch::before {
+    content: "";
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background-color: #fff;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+    transition: transform 0.2s ease;
+}
+
+input[type="checkbox"].switch:checked {
+    background-color: #4CAF50;
+    border-color: #4CAF50;
+}
+
+input[type="checkbox"].switch:checked::before {
+    transform: translateX(16px);
+}
+
+input[type="checkbox"].switch:focus-visible {
+    outline: 2px solid #4CAF50;
+    outline-offset: 2px;
+}
+
 #video_elements_list {
     margin-top: 12px;
     padding-top: 8px;
@@ -980,6 +1353,32 @@ legend {
     border-radius: 6px;
     padding: 8px 12px;
     margin-top: 12px;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    height: calc(100% - 12px);
+    min-height: 0;
+}
+
+/* centered progress overlay; the page itself stays visible but inert */
+#search_progress_container {
+    position: absolute;
+    inset: 0;
+    z-index: 5;
+    display: grid;
+    place-items: center;
+    padding: 16px;
+    background: rgba(255, 255, 255, 0.78);
+}
+
+#search_progress_container:empty {
+    display: none;
+}
+
+#search_progress_container .loading-progress {
+    width: min(320px, 100%);
+    margin: 0;
+    box-shadow: 0 8px 22px rgba(16, 36, 25, 0.18);
 }
 
 #tab_bar {
@@ -1010,6 +1409,11 @@ legend {
 .tab_page {
     margin-top: 12px;
     overflow-y: auto;
+}
+
+.tab_page.search_page {
+    position: relative;
+    overflow: hidden;
 }
 
 #appearance_fieldset {
@@ -1046,7 +1450,8 @@ legend {
 }
 
 #search_results {
-    max-height: 180px;
+    flex: 1 1 auto;
+    min-height: 0;
     overflow-y: auto;
     margin-top: 10px;
 }
@@ -1113,6 +1518,13 @@ legend {
 #search_status {
     display: block;
     margin-top: 6px;
+    flex: 0 0 auto;
+}
+
+#search_status:empty,
+#search_pager:empty,
+#search_results_nav:empty {
+    display: none;
 }
 
 .search_empty_box {
@@ -1123,6 +1535,838 @@ legend {
     text-align: center;
     background-color: #fafafa;
 }
+
+#search_results_nav {
+    margin-top: 8px;
+    flex: 0 0 auto;
+}
+
+/* the Search page's lists take the leftover height; the results box scrolls */
+.search_page .subtitle-chooser-list {
+    max-height: none;
+}
+
+/* clickable path: search results and archive picker share these classes */
+.subtitle_path {
+    display: flex;
+    align-items: baseline;
+    font-size: 11px;
+    min-width: 0;
+}
+
+/* [reason] truncate each segment instead of the whole row, so the level the user
+   is on (last segment) is never the part that gets cut off */
+.subtitle_path a,
+.subtitle_path > span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+}
+
+.subtitle_path a {
+    color: #1976d2;
+    text-decoration: none;
+}
+
+.subtitle_path a:hover {
+    text-decoration: underline;
+}
+
+.subtitle_path .search_path_sep {
+    color: #aaa;
+    margin: 0 4px;
+    flex-shrink: 0;
+}
+
+.subtitle_path .search_path_label {
+    color: #666;
+}
+
+.subtitle_path .search_path_current {
+    color: #333;
+    font-weight: bold;
+    flex-shrink: 0;
+}
+
+.subtitle-chooser .subtitle_path {
+    margin-bottom: 6px;
+}
+
+#search_pager {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 6px;
+    flex: 0 0 auto;
+}
+
+#search_pager button {
+    min-width: 24px;
+    padding: 2px 6px;
+    font-size: 11px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    background-color: #fff;
+    cursor: pointer;
+}
+
+#search_pager button.active_page {
+    background-color: #1976d2;
+    border-color: #1976d2;
+    color: #fff;
+}
+
+#search_pager button:disabled {
+    opacity: 0.4;
+    cursor: default;
+}
+
+/* Refined extension panel */
+#addsubtitle_menu {
+    --panel-canvas: #ffffff;
+    --panel-surface: #f6f8f7;
+    --panel-surface-strong: #edf3ef;
+    --panel-border: #d5ddd8;
+    --panel-text: #1d2923;
+    --panel-muted: #52645a;
+    --panel-accent: #18794e;
+    --panel-accent-hover: #11663f;
+    --panel-accent-soft: #e7f4ec;
+    --panel-danger: #b42318;
+    --panel-danger-soft: #fef3f2;
+    --panel-warning: #9a5b00;
+    --panel-focus: #146c43;
+    right: 12px;
+    bottom: 12px;
+    box-sizing: border-box !important;
+    width: min(580px, calc(100vw - 24px));
+    max-height: min(80vh, 600px);
+    overflow: hidden;
+    border: 1px solid var(--panel-border);
+    border-radius: 12px;
+    box-shadow: 0 10px 30px rgba(16, 36, 25, 0.2);
+    padding: 0 14px 12px;
+    background: var(--panel-canvas);
+    color: var(--panel-text);
+}
+
+#addsubtitle_menu *,
+#addsubtitle_menu *::before,
+#addsubtitle_menu *::after {
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-size: 12px;
+    line-height: 1.35 !important;
+}
+
+#addsubtitle_menu ::selection {
+    color: #fff;
+    background: var(--panel-accent);
+}
+
+#addsubtitle_menu button:where(:not(.search_result_item, .subtitle-chooser-row)),
+#addsubtitle_menu input,
+#addsubtitle_menu select {
+    color: var(--panel-text);
+}
+
+#addsubtitle_menu button:where(:not(.search_result_item, .subtitle-chooser-row)) {
+    min-height: 30px;
+    border-color: #b9c5be;
+    border-radius: 6px;
+    background: #fff;
+    padding: 4px 10px;
+    transition: color 0.15s ease, background-color 0.15s ease, border-color 0.15s ease;
+}
+
+#addsubtitle_menu button:where(:not(.search_result_item, .subtitle-chooser-row)):hover {
+    border-color: #8da096;
+    background: var(--panel-surface);
+}
+
+#addsubtitle_menu button:active {
+    transform: none;
+}
+
+#addsubtitle_menu button:focus-visible,
+#addsubtitle_menu input:focus-visible,
+#addsubtitle_menu select:focus-visible,
+#addsubtitle_menu summary:focus-visible,
+#addsubtitle_menu [tabindex]:focus-visible {
+    outline: 3px solid rgba(24, 121, 78, 0.28);
+    outline-offset: 2px;
+}
+
+#addsubtitle_menu input:not([type="file"]):not([type="checkbox"]):not([type="color"]):not([type="range"]),
+#addsubtitle_menu select {
+    width: 100%;
+    height: 28px;
+    border: 1px solid #b9c5be;
+    border-radius: 6px;
+    background: #fff;
+    padding: 0 8px;
+}
+
+#addsubtitle_menu input::placeholder {
+    color: #667a6f;
+    opacity: 1;
+}
+
+#tab_bar {
+    position: relative;
+    z-index: 2;
+    min-height: 38px;
+    align-items: end;
+    gap: 4px;
+    padding-right: 38px;
+    background: var(--panel-canvas);
+    border-bottom-color: var(--panel-border);
+}
+
+#tab_bar button {
+    min-height: 34px;
+    border: none;
+    border-bottom: 2px solid transparent;
+    border-radius: 0;
+    background: transparent;
+    padding: 6px 10px;
+    color: var(--panel-muted);
+}
+
+#tab_bar button:hover {
+    background: var(--panel-surface);
+}
+
+#tab_bar button.active {
+    color: var(--panel-accent);
+    border-bottom-color: var(--panel-accent);
+}
+
+#close_button {
+    z-index: 3;
+    top: 3px;
+    right: 10px;
+    width: 32px;
+    height: 32px;
+    color: var(--panel-muted);
+}
+
+.tab_page {
+    margin-top: 0;
+    padding-top: 8px;
+    overscroll-behavior: contain;
+    scrollbar-color: #9aaba1 transparent;
+    scrollbar-width: thin;
+}
+
+.panel_section,
+.settings_group {
+    margin: 0;
+    padding: 0 0 8px;
+    border: 0;
+}
+
+.panel_section + .panel_section,
+.panel_section + fieldset.panel_section,
+.settings_group + .settings_group {
+    border-top: 1px solid var(--panel-border);
+    padding-top: 8px;
+}
+
+.panel_section h2,
+.section_heading h2,
+.settings_group legend {
+    margin: 0;
+    padding: 0;
+    color: var(--panel-text);
+    font-size: 13px;
+    font-weight: 700;
+}
+
+.section_heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin: 0;
+}
+
+.section_heading button {
+    min-height: 26px;
+    padding: 3px 8px;
+}
+
+.field {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 3px;
+    min-width: 0;
+    margin-top: 8px;
+}
+
+.field label,
+.filter_row label {
+    color: var(--panel-muted);
+    font-size: 11px !important;
+    font-weight: 600;
+}
+
+.toggle_row,
+.status_row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+.toggle_row label {
+    flex: 1 1 auto;
+    font-weight: 600;
+}
+
+#settings_grid,
+#appearance_grid {
+    gap: 8px 12px;
+    margin-top: 8px;
+}
+
+#video_elements_list {
+    max-height: 116px;
+    margin-top: 8px;
+    padding-top: 0;
+    border-top: 0;
+}
+
+.video_list_item,
+.subtitle-chooser-row,
+.search_result_item {
+    width: 100%;
+    min-height: 34px;
+    margin-top: 4px;
+    border: 1px solid transparent;
+    border-radius: 7px;
+    background: var(--panel-surface);
+    color: var(--panel-text);
+    padding: 5px 8px;
+    text-align: left;
+    transition: color 0.15s ease, background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.video_list_item:hover,
+.subtitle-chooser-row:hover,
+.search_result_item:hover {
+    border-color: #aebdb4;
+    background: var(--panel-surface-strong);
+}
+
+#video_elements_list .selected_video_list,
+.search_result_item.selected_result {
+    border-color: var(--panel-accent);
+    background: var(--panel-accent-soft);
+    color: #0f5b39;
+}
+
+.video_item_title {
+    display: block;
+    font-weight: 650;
+}
+
+.video_item_meta,
+.result_meta,
+.detected_hint {
+    display: block;
+    color: var(--panel-muted);
+    font-size: 11px !important;
+}
+
+fieldset.panel_section {
+    min-inline-size: 0;
+}
+
+fieldset.panel_section > legend {
+    padding: 0;
+    color: var(--panel-text);
+    font-weight: 700;
+}
+
+#subtitle_upload_button,
+#search_button {
+    border-color: var(--panel-accent);
+    background: var(--panel-accent);
+    color: #fff;
+    font-weight: 650;
+}
+
+#subtitle_upload_button:hover,
+#search_button:hover {
+    border-color: var(--panel-accent-hover);
+    background: var(--panel-accent-hover);
+}
+
+#upload_error_message,
+.field_error {
+    color: var(--panel-danger);
+}
+
+#upload_error_message {
+    white-space: normal;
+}
+
+#upload_error_message.source_status {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.field_error {
+    min-height: 0;
+    font-size: 12px !important;
+}
+
+.loading-progress {
+    margin-top: 8px;
+    padding: 8px;
+    border-color: var(--panel-border);
+    border-radius: 7px;
+    background: var(--panel-surface);
+}
+
+.loading-message {
+    color: var(--panel-text);
+    font-size: 11px !important;
+}
+
+.loading-bar {
+    height: 5px;
+    border-radius: 999px;
+    background: #dbe4de;
+}
+
+.loading-fill {
+    width: 0;
+    border-radius: 999px;
+    background: var(--panel-accent);
+    transition: width 0.2s ease;
+}
+
+.loading-fill::after {
+    display: none;
+}
+
+/* unknown duration: slide a fixed fill instead of showing a frozen 0% bar */
+.loading-bar.indeterminate .loading-fill {
+    width: 40%;
+    transition: none;
+    animation: loading-indeterminate 1.2s ease-in-out infinite;
+}
+
+@keyframes loading-indeterminate {
+    from { transform: translateX(-110%); }
+    to { transform: translateX(260%); }
+}
+
+.search_input_row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+.filter_row {
+    display: grid;
+    grid-template-columns: auto minmax(110px, 1fr) auto minmax(100px, 0.8fr);
+    align-items: center;
+    gap: 4px 8px;
+    margin-top: 8px;
+}
+
+#search_block {
+    height: calc(100% - 2px);
+    margin-top: 0;
+    border: 0;
+    padding: 0;
+}
+
+#search_results {
+    margin-top: 6px;
+}
+
+.result_title_text {
+    font-weight: 650;
+}
+
+.result_badges {
+    display: flex;
+    flex: 0 0 auto;
+    gap: 5px;
+}
+
+#search_pager {
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+}
+
+#search_pager .page_status {
+    color: var(--panel-muted);
+    font-variant-numeric: tabular-nums;
+    font-size: 11px !important;
+}
+
+#appearance_info_popover {
+    top: 26px;
+    border-color: #d9b35e;
+    background: #fff8e8;
+    color: #553600;
+}
+
+#appearance_info_btn {
+    width: 20px;
+    height: 20px;
+    min-width: 20px;
+    min-height: 20px !important;
+    padding: 0;
+}
+
+.color_controls {
+    display: grid;
+    grid-template-columns: 36px minmax(70px, 1fr) 38px;
+    align-items: center;
+    gap: 6px;
+}
+
+#addsubtitle_menu input[type="color"] {
+    width: 36px;
+    height: 28px;
+    border: 1px solid #b9c5be;
+    border-radius: 6px;
+    background: #fff;
+    padding: 2px;
+}
+
+#addsubtitle_menu input[type="range"] {
+    width: 100%;
+    accent-color: var(--panel-accent);
+}
+
+.color_controls output {
+    color: var(--panel-muted);
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    font-size: 11px !important;
+}
+
+.advanced_color {
+    margin-top: 1px;
+}
+
+.advanced_color summary {
+    color: var(--panel-muted);
+    cursor: pointer;
+    font-size: 11px !important;
+}
+
+.advanced_color input {
+    margin-top: 4px;
+}
+
+.quiet_button {
+    margin-top: 8px;
+}
+
+.inline_confirmation {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+    border: 1px solid #f0b4ae;
+    border-radius: 7px;
+    background: var(--panel-danger-soft);
+    padding: 6px 8px;
+}
+
+.inline_confirmation[hidden] {
+    display: none;
+}
+
+.inline_confirmation span {
+    flex: 1 1 auto;
+}
+
+.inline_hint {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+    border: 1px solid #d9b35e;
+    border-radius: 7px;
+    background: #fff8e8;
+    color: #553600;
+    padding: 6px 8px;
+}
+
+.inline_hint[hidden] {
+    display: none;
+}
+
+.inline_hint span {
+    flex: 1 1 auto;
+}
+
+.inline_hint button {
+    flex: 0 0 auto;
+}
+
+.danger_button {
+    border-color: var(--panel-danger) !important;
+    background: var(--panel-danger) !important;
+    color: #fff !important;
+}
+
+.settings_layout {
+    display: flex;
+    flex-direction: column;
+    min-height: 100%;
+}
+
+#subtitle_services .line {
+    margin-top: 8px;
+}
+
+.settings_footer {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: auto;
+    padding-top: 8px;
+}
+
+#addsubtitle_menu #donate_button {
+    flex: 0 0 auto;
+    margin-left: 0 !important;
+    border-color: #a86400;
+    background: #b96f00;
+    color: #fff;
+    font-weight: 700;
+}
+
+#addsubtitle_menu #donate_button:hover {
+    border-color: #8e5100;
+    background: #965700;
+}
+
+#no_videos,
+.search_empty_box {
+    border-color: #aebdb4;
+    border-radius: 7px;
+    background: var(--panel-surface);
+    color: var(--panel-muted);
+    text-align: left;
+}
+
+#no_videos p {
+    margin: 5px 0;
+}
+
+#no_videos ul {
+    margin: 0;
+    padding-left: 20px;
+}
+
+#no_videos li + li {
+    margin-top: 4px;
+}
+
+#addsubtitle_menu input[type="checkbox"].switch {
+    width: 36px;
+    height: 20px;
+    border-color: #8fa098;
+    background: #a9b5ae;
+}
+
+#addsubtitle_menu input[type="checkbox"].switch::before {
+    width: 14px;
+    height: 14px;
+}
+
+#addsubtitle_menu input[type="checkbox"].switch:checked {
+    border-color: var(--panel-accent);
+    background: var(--panel-accent);
+}
+
+#addsubtitle_menu input[type="checkbox"].switch:checked::before {
+    transform: translateX(16px);
+}
+
+#addsubtitle_menu input[type="checkbox"].switch:focus-visible {
+    outline-color: rgba(24, 121, 78, 0.35);
+}
+
+.hover_video_element {
+    outline: 3px solid #18794e !important;
+    outline-offset: -3px !important;
+}
+
+/* three fields on the first row, the two color fields on the second */
+#appearance_grid {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+#appearance_grid > :nth-child(-n+3) {
+    grid-column: span 2;
+}
+
+#appearance_grid > :nth-child(n+4) {
+    grid-column: span 3;
+}
+
+.conversion_row,
+.services_keys {
+    display: grid;
+    gap: 6px 12px;
+    margin-top: 6px;
+}
+
+.conversion_row {
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    gap: 4px 8px;
+}
+
+.services_keys {
+    grid-template-columns: 1fr 1fr;
+}
+
+.conversion_row .toggle_row,
+.conversion_row .status_row,
+.services_keys .field {
+    margin-top: 0;
+}
+
+.secret_input_row {
+    position: relative;
+}
+
+.secret_input_row input {
+    padding-right: 36px !important;
+}
+
+#addsubtitle_menu .secret_visibility_button {
+    position: absolute;
+    top: 50%;
+    right: 2px;
+    display: grid;
+    place-items: center;
+    width: 28px;
+    height: 26px;
+    min-height: 0;
+    border: 0;
+    background: transparent;
+    color: var(--panel-muted);
+    padding: 4px;
+    transform: translateY(-50%);
+}
+
+#addsubtitle_menu .secret_visibility_button:hover,
+#addsubtitle_menu .secret_visibility_button:active {
+    border: 0;
+    background: transparent;
+    color: var(--panel-text);
+    transform: translateY(-50%);
+}
+
+#addsubtitle_menu .secret_visibility_button:focus-visible {
+    outline: 2px solid var(--panel-accent);
+    outline-offset: -2px;
+}
+
+#addsubtitle_menu .secret_visibility_button svg {
+    width: 18px;
+    height: 18px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+.conversion_row .toggle_row label {
+    flex: 0 0 auto;
+}
+
+.conversion_row .status_row {
+    justify-content: flex-end;
+    gap: 6px;
+    white-space: nowrap;
+}
+
+.conversion_row .status_row button {
+    min-height: 26px;
+    padding: 2px 6px;
+}
+
+#keys_status {
+    color: var(--panel-muted);
+}
+
+@media (max-width: 520px) {
+    #addsubtitle_menu {
+        right: 8px;
+        bottom: 8px;
+        width: calc(100vw - 16px);
+        padding-right: 12px;
+        padding-left: 12px;
+    }
+
+    #settings_grid,
+    #appearance_grid,
+    .services_keys {
+        grid-template-columns: 1fr;
+    }
+
+    #appearance_grid > * {
+        grid-column: auto;
+    }
+
+    .conversion_row {
+        grid-template-columns: 1fr;
+    }
+
+    .conversion_row .status_row {
+        justify-content: flex-start;
+    }
+
+    .filter_row {
+        grid-template-columns: 1fr;
+    }
+
+    .filter_row label {
+        margin-top: 4px;
+    }
+
+    .inline_confirmation {
+        align-items: stretch;
+        flex-direction: column;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    #addsubtitle_menu *,
+    #addsubtitle_menu *::before,
+    #addsubtitle_menu *::after {
+        scroll-behavior: auto !important;
+        transition-duration: 0.01ms !important;
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+    }
+
+    /* keep the loading bar visible without motion */
+    #addsubtitle_menu .loading-bar.indeterminate .loading-fill {
+        animation: none !important;
+        transform: none;
+        width: 35%;
+    }
+}
 `;
 shadow.appendChild(style);
 
@@ -1132,7 +2376,8 @@ requestAnimationFrame(sync_tab_heights);
 var globalStyle = document.createElement("style");
 globalStyle.textContent = `
 .hover_video_element{
-    border: 4px solid red;
+    outline: 3px solid #18794e !important;
+    outline-offset: -3px;
 }
 #subtitle_element{
     text-align: center;
@@ -1156,28 +2401,42 @@ function update_video_elements_list(){
         // Use safer DOM method instead of innerHTML
         const noVideosDiv = document.createElement("div");
         noVideosDiv.id = "no_videos";
-        noVideosDiv.textContent = "No video elements found.";
-        
-        const lineBreak = document.createElement("br");
-        noVideosDiv.appendChild(lineBreak);
-        
-        const firefoxText = document.createTextNode("Firefox: press Shift + right-click on the video, then select \"This Frame\" > \"Open Frame in New Tab\".");
-        noVideosDiv.appendChild(firefoxText);
-
-        const browserLineBreak = document.createElement("br");
-        noVideosDiv.appendChild(browserLineBreak);
-
-        const chromeText = document.createTextNode("Chrome: right-click on the video, then select \"Open This Frame in New Tab\".");
-        noVideosDiv.appendChild(chromeText);
+        const emptyTitle = document.createElement("strong");
+        emptyTitle.textContent = "No video elements found.";
+        const emptyHelp = document.createElement("p");
+        emptyHelp.textContent = "The video may be inside a separate frame:";
+        const emptySteps = document.createElement("ul");
+        const firefoxStep = document.createElement("li");
+        firefoxStep.textContent = "Firefox: Shift + right-click the video, then choose This Frame → Open Frame in New Tab.";
+        const chromeStep = document.createElement("li");
+        chromeStep.textContent = "Chrome: right-click the video, then choose Open This Frame in New Tab.";
+        emptySteps.append(firefoxStep, chromeStep);
+        noVideosDiv.append(emptyTitle, emptyHelp, emptySteps);
         
         video_elements_list.appendChild(noVideosDiv);
         sync_tab_heights();
         return;
     }
     for(var i = 0; i < video_elements.length; i++){
-        var video_list_item = document.createElement("div");
+        var video_list_item = document.createElement("button");
+        video_list_item.type = "button";
         video_list_item.className = "video_list_item";
-        video_list_item.textContent = video_elements[i].currentSrc;
+        const source = video_elements[i].currentSrc || video_elements[i].src || "";
+        let host = "Embedded media";
+        try {
+            if (source) host = new URL(source, location.href).hostname || "Embedded media";
+        } catch (_error) {}
+        const videoTitle = document.createElement("span");
+        videoTitle.className = "video_item_title";
+        videoTitle.textContent = "Video " + (i + 1);
+        const videoMeta = document.createElement("span");
+        videoMeta.className = "video_item_meta";
+        const dimensions = video_elements[i].videoWidth && video_elements[i].videoHeight
+            ? video_elements[i].videoWidth + " × " + video_elements[i].videoHeight
+            : "Size not available";
+        videoMeta.textContent = host + " · " + dimensions;
+        video_list_item.title = source;
+        video_list_item.append(videoTitle, videoMeta);
         (function(){
             var current_video_element = video_elements[i];
             video_list_item.addEventListener("mouseenter", function(){
@@ -1189,6 +2448,8 @@ function update_video_elements_list(){
                 current_video_element.classList.remove("hover_video_element");
             });
             video_list_item.addEventListener("click", function(){
+                // a lone video must stay selected; there is nothing to switch to
+                if (video_elements.length === 1 && the_video_element === current_video_element) return;
                 const previousTrack = extTrack;
                 var list = shadow_root.querySelectorAll(".video_list_item");
                 for(var i = 0; i < list.length; i++){
@@ -1211,7 +2472,13 @@ function update_video_elements_list(){
                 applySubtitleVisibility();
             });
         }());
+        if (the_video_element === video_elements[i]) {
+            video_list_item.classList.add("selected_video_list");
+        }
         video_elements_list.append(video_list_item);
+    }
+    if (video_elements.length === 1 && !the_video_element) {
+        video_elements_list.firstElementChild.click();
     }
     sync_tab_heights();
 }
@@ -1457,7 +2724,8 @@ function showTrackError(error){
     console.error("External TextTrack error:", error);
     if (errorMessage) {
         errorMessage.textContent = "Fullscreen subtitles unavailable: " + error.message;
-        errorMessage.style.color = "red";
+        errorMessage.classList.remove("source_status");
+        errorMessage.style.color = "#b42318";
         errorMessage.title = "";
     }
 }
@@ -2191,6 +3459,7 @@ shadow_root.getElementById("subtitle_upload_button").addEventListener("click", a
     
     // Reset error messages and retry button
     error_message_element.textContent = "";
+    error_message_element.classList.remove("source_status");
     error_message_element.title = "";
     retry_button.style.display = "none";
     
@@ -2225,6 +3494,12 @@ shadow_root.getElementById("subtitle_upload_button").addEventListener("click", a
     }
 });
 
+urlInput.addEventListener("keydown", function(event){
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    uploadButton.click();
+});
+
 // New: Handle URL upload
 async function handleUrlUpload(url, progressIndicator) {
     try {
@@ -2238,14 +3513,15 @@ async function handleUrlUpload(url, progressIndicator) {
         
         const lowerUrl = url.toLowerCase().split('?')[0];
         const urlExt = lowerUrl.split('.').pop();
+        const urlName = decodeURIComponent(url.split('?')[0].split('/').pop() || url);
         const archiveMimes = ['application/zip', 'application/x-7z-compressed', 'application/vnd.rar', 'application/x-rar-compressed'];
         const isZip = blob.type === "application/zip" || urlExt === 'zip';
         const isArchive = isZip || FileValidator.ARCHIVE_FORMATS.includes(urlExt) || archiveMimes.includes(blob.type);
         
         if (isZip) {
-            await handleZipFile(await blob_to_base64(blob), progressIndicator);
+            await handleZipFile(await blob_to_base64(blob), progressIndicator, { name: urlName });
         } else if (isArchive) {
-            await handleArchiveFile(blob, progressIndicator);
+            await handleArchiveFile(blob, progressIndicator, { name: urlName });
         } else {
             progressIndicator.updateProgress(70, 'Reading subtitle content...');
             const text = await blob.text();
@@ -2283,9 +3559,9 @@ async function handleFileUpload(file, progressIndicator) {
         if (fileInfo.isArchive) {
             progressIndicator.updateProgress(50, 'Extracting files...');
             if (fileInfo.format === 'zip') {
-                await handleZipFile(await blob_to_base64(file), progressIndicator);
+                await handleZipFile(await blob_to_base64(file), progressIndicator, { name: file.name });
             } else {
-                await handleArchiveFile(file, progressIndicator);
+                await handleArchiveFile(file, progressIndicator, { name: file.name });
             }
             progressIndicator.updateProgress(100, 'Loading complete!');
             return;
@@ -2307,83 +3583,64 @@ async function handleFileUpload(file, progressIndicator) {
     }
 }
 
-// ===== Archive subtitle chooser (episode list -> version list) =====
+// ===== Archive subtitle picker (episode list -> version list) =====
 // [reason] SubHD packs are multi-episode/multi-language; auto-picking the first
-// subtitle loads the wrong one. Two-step picker: episodes then variants.
+// subtitle loads the wrong one. The host decides where the picker renders: the
+// progress box for manual uploads, or the search result area for packs that were
+// downloaded from a search result (there the path is the only way out).
+function append_chooser_row(list, options){
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'subtitle-chooser-row';
+    row.textContent = options.text;
+    if (options.title) row.title = options.title;
+    row.addEventListener('click', options.on_click);
+    list.appendChild(row);
+    return row;
+}
 
-// [reason] the chooser lives inside the progress box so it reuses that spot;
-// the progress bar is hidden while choosing and comes back during extraction/parsing
-function build_chooser(progress, onPick, onCancel){
-    const container = document.createElement('div');
-    container.className = 'subtitle-chooser';
-    progress.progressElement.appendChild(container);
-    const bar = progress.progressElement.querySelector('.loading-bar');
-    const message = progress.progressElement.querySelector('.loading-message');
-
-    const header = document.createElement('div');
-    header.className = 'subtitle-chooser-title';
-    container.appendChild(header);
-    const list = document.createElement('div');
-    list.className = 'subtitle-chooser-list';
-    container.appendChild(list);
-    const footer = document.createElement('div');
-    footer.className = 'subtitle-chooser-actions';
-    const backBtn = document.createElement('button');
-    backBtn.textContent = 'Back';
-    backBtn.style.display = 'none';
-    backBtn.addEventListener('click', function(){ showEpisodes(); });
-    footer.appendChild(backBtn);
-    const cancelBtn = document.createElement('button');
-    cancelBtn.textContent = 'Cancel';
-    cancelBtn.addEventListener('click', function(){
-        container.remove();
-        set_picker_mode(false);
-        onCancel();
-    });
-    footer.appendChild(cancelBtn);
-    container.appendChild(footer);
-
+function create_picker(host){
+    const archive = archivePathLabel(host.name);
+    // a click on any level above the archive leaves the picker, so the promise
+    // always settles even when the navigation starts it off
+    const base = buildPickerBaseSegments(host.base_segments, host.on_leave);
     let groups = [];
-
-    function set_picker_mode(picking){
-        container.style.display = picking ? '' : 'none';
-        if (bar) bar.style.display = picking ? 'none' : '';
-        if (message) message.style.display = picking ? 'none' : '';
-    }
+    let episodes_scroll = 0;
 
     function showEpisodes(){
-        backBtn.style.display = 'none';
-        header.textContent = 'This archive has multiple episodes — pick one:';
-        list.textContent = '';
+        host.set_status('');
+        render_path(host.nav, base.concat([{ label: archive.label, title: archive.title }]));
+        host.list.textContent = '';
         groups.forEach(function(g){
-            const row = document.createElement('div');
-            row.className = 'subtitle-chooser-row';
-            row.textContent = g.label;
-            row.title = g.items.map(function(it){ return it.path; }).join('\n');
-            row.addEventListener('click', function(){ pickEpisode(g); });
-            list.appendChild(row);
+            append_chooser_row(host.list, {
+                text: g.label,
+                title: g.items.map(function(it){ return it.path; }).join('\n'),
+                on_click: function(){ pickEpisode(g); }
+            });
         });
+        host.list.scrollTop = episodes_scroll;
     }
 
     function showVersions(g){
-        backBtn.style.display = groups.length > 1 ? '' : 'none';
-        header.textContent = groups.length > 1
-            ? 'Episode ' + g.label + ' — pick a version:'
-            : 'Multiple versions found — pick one:';
-        list.textContent = '';
+        host.set_status('');
+        render_path(host.nav, base.concat([
+            { label: archive.label, title: archive.title, on_click: groups.length > 1 ? showEpisodes : null },
+            { label: g.label }
+        ]));
+        episodes_scroll = host.list.scrollTop;
+        host.list.textContent = '';
         g.items.forEach(function(it){
-            const row = document.createElement('div');
-            row.className = 'subtitle-chooser-row';
-            row.textContent = it.short + '  ·  ' + it.ext.toUpperCase();
-            row.title = it.path;
-            row.addEventListener('click', function(){ onPick(it); });
-            list.appendChild(row);
+            append_chooser_row(host.list, {
+                text: it.short + '  ·  ' + it.ext.toUpperCase(),
+                title: it.path,
+                on_click: function(){ host.on_pick(it); }
+            });
         });
     }
 
     function pickEpisode(g){
         if (g.items.length === 1) {
-            onPick(g.items[0]);
+            host.on_pick(g.items[0]);
             return;
         }
         showVersions(g);
@@ -2393,7 +3650,7 @@ function build_chooser(progress, onPick, onCancel){
         show: function(candidates){
             // candidates: [{ path, ext, getText }]
             groups = groupByEpisode(candidates);
-            set_picker_mode(true);
+            host.on_open();
             if (groups.length === 1) {
                 // one episode (or only 其他): skip straight to the version list
                 pickEpisode(groups[0]);
@@ -2401,13 +3658,66 @@ function build_chooser(progress, onPick, onCancel){
             }
             showEpisodes();
         },
-        setBusy: function(){ set_picker_mode(false); },
+        setBusy: function(){ host.on_busy(); },
         // parsing failed: bring the same list back so the user can pick another
         resume: function(error){
-            set_picker_mode(true);
-            header.textContent = (error && error.message ? error.message : 'Load failed') + ' — pick another or cancel:';
+            host.on_open();
+            host.set_status((error && error.message ? error.message : 'Load failed') + ' — pick another file:');
         }
     };
+}
+
+// Manual uploads keep the picker in the progress box; the bar/message step aside
+// while choosing and come back during reading/parsing
+function mount_inline_picker(progress, name, on_pick, on_cancel){
+    const container = document.createElement('div');
+    container.className = 'subtitle-chooser';
+    progress.progressElement.appendChild(container);
+    const bar = progress.progressElement.querySelector('.loading-bar');
+    const message = progress.progressElement.querySelector('.loading-message');
+
+    const path = document.createElement('div');
+    path.className = 'subtitle_path';
+    container.appendChild(path);
+    const status = document.createElement('div');
+    status.className = 'subtitle-chooser-title';
+    status.style.display = 'none';
+    container.appendChild(status);
+    const list = document.createElement('div');
+    list.className = 'subtitle-chooser-list';
+    container.appendChild(list);
+    const footer = document.createElement('div');
+    footer.className = 'subtitle-chooser-actions';
+    const cancelBtn = document.createElement('button');
+    cancelBtn.textContent = 'Cancel';
+    footer.appendChild(cancelBtn);
+    container.appendChild(footer);
+
+    function set_picker_mode(picking){
+        container.style.display = picking ? '' : 'none';
+        if (bar) bar.style.display = picking ? 'none' : '';
+        if (message) message.style.display = picking ? 'none' : '';
+    }
+
+    cancelBtn.addEventListener('click', function(){
+        container.remove();
+        set_picker_mode(false);
+        on_cancel();
+    });
+
+    return create_picker({
+        nav: path,
+        list: list,
+        name: name,
+        on_pick: on_pick,
+        on_open: function(){ set_picker_mode(true); },
+        on_busy: function(){ set_picker_mode(false); },
+        on_leave: null,
+        set_status: function(text){
+            status.textContent = text;
+            status.style.display = text ? '' : 'none';
+        }
+    });
 }
 
 // New: Handle ZIP files
@@ -2423,7 +3733,7 @@ function blob_to_base64(blob){
     });
 }
 
-async function handleZipFile(base64, progressIndicator) {
+async function handleZipFile(base64, progressIndicator, archiveOptions = {}) {
     try {
         progressIndicator.updateProgress(30, 'Extracting files...');
 
@@ -2455,8 +3765,9 @@ async function handleZipFile(base64, progressIndicator) {
             );
         }
 
-        await load_archive_candidate(candidates, progressIndicator);
+        await load_archive_candidate(candidates, progressIndicator, archiveOptions);
     } catch (error) {
+        if (error instanceof SubtitleError) throw error;
         throw new SubtitleError(
             `ZIP file processing failed: ${error.message}`,
             'ZIP_PROCESSING_ERROR',
@@ -2465,25 +3776,71 @@ async function handleZipFile(base64, progressIndicator) {
     }
 }
 
-// Shared by zip/7z/rar handlers: one candidate -> load directly; many -> chooser
-function load_archive_candidate(candidates, progressIndicator){
+// Shared by zip/7z/rar handlers: one candidate -> load directly; many -> picker
+function load_archive_candidate(candidates, progressIndicator, archiveOptions){
+    archiveOptions = archiveOptions || {};
     return new Promise(function(resolve, reject){
         if (candidates.length === 1) {
             load_one(candidates[0]).then(resolve, reject);
             return;
         }
-        const chooser = build_chooser(
-            progressIndicator,
-            function(item){
-                chooser.setBusy();
-                load_one(item).then(resolve, function(error){
-                    // keep the chooser open so the user can pick another file
-                    console.error('Subtitle load failed:', error);
-                    chooser.resume(error);
-                });
-            },
-            function(){ reject(new SubtitleError('Cancelled — no subtitle loaded.', 'SUBTITLE_CHOICE_CANCELLED')); }
-        );
+        if (archiveOptions.mode === 'results') {
+            // [reason] search-downloaded packs pick their file in the same area the
+            // subtitles are listed in; save the view so leaving restores it
+            const saved = captureSearchView(searchState);
+            let settled = false;
+            let closed = false;
+            const leave = function(){
+                if (closed) return;
+                closed = true;
+                searchState.archivePicker = null;
+                restoreSearchView(searchState, saved);
+                render_search_results(saved.results, saved.page);
+                update_cached_icons();
+                // already loaded a file: only the view changes, nothing to cancel
+                if (settled) return;
+                set_search_status('No subtitle loaded.', '');
+                reject(new SubtitleError('No subtitle loaded.', 'SUBTITLE_CHOICE_CANCELLED'));
+            };
+            const picker = create_picker({
+                nav: search_results_nav,
+                list: search_results,
+                name: archiveOptions.name,
+                // [reason] without a parent level the picker would have no way out
+                // (results mode has no Cancel), so fall back to one
+                base_segments: saved.path.length ? saved.path : [{ label: 'Search results' }],
+                on_pick: function(item){
+                    progressIndicator.show('Reading ' + item.path + '...');
+                    runArchiveSelection(item, progressIndicator, load_one).then(function(){
+                        settled = true;
+                        leave();
+                        resolve();
+                    }, function(error){
+                        console.error('Subtitle load failed:', error);
+                        picker.resume(error);
+                    });
+                },
+                on_leave: leave,
+                on_open: function(){},
+                on_busy: function(){},
+                set_status: function(text){ set_search_status(text, text ? 'red' : ''); }
+            });
+            searchState.archivePicker = { cancel: leave };
+            search_pager.textContent = '';
+            progressIndicator.hide();
+            picker.show(candidates);
+            return;
+        }
+        const chooser = mount_inline_picker(progressIndicator, archiveOptions.name, function(item){
+            chooser.setBusy();
+            load_one(item).then(resolve, function(error){
+                // keep the chooser open so the user can pick another file
+                console.error('Subtitle load failed:', error);
+                chooser.resume(error);
+            });
+        }, function(){
+            reject(new SubtitleError('Cancelled — no subtitle loaded.', 'SUBTITLE_CHOICE_CANCELLED'));
+        });
         chooser.show(candidates);
     });
 
@@ -2543,7 +3900,7 @@ function collect_subtitle_files_in_tree(node, prefix, out){
     }
 }
 
-async function handleArchiveFile(blob, progressIndicator) {
+async function handleArchiveFile(blob, progressIndicator, archiveOptions = {}) {
     try {
         ensure_archive_ready();
         
@@ -2572,7 +3929,7 @@ async function handleArchiveFile(blob, progressIndicator) {
             );
         }
 
-        await load_archive_candidate(candidates, progressIndicator);
+        await load_archive_candidate(candidates, progressIndicator, archiveOptions);
 
     } catch (error) {
         if (error instanceof SubtitleError) throw error;
@@ -2634,7 +3991,8 @@ function handleUploadError(error, errorElement, retryButton) {
     }
     
     errorElement.textContent = errorMessage;
-    errorElement.style.color = "red";
+    errorElement.classList.remove("source_status");
+    errorElement.style.color = "#b42318";
     errorElement.title = "";
     
     if (showRetry) {
@@ -2660,24 +4018,153 @@ shadow_root.getElementById("subtitle_offset_input").addEventListener("change", f
     applySubtitleVisibility();
 });
 
-shadow_root.getElementById("subtitle_offset_top_input").addEventListener("input", function(){
-    subtitle_offset_top = parseFloat(shadow_root.getElementById("subtitle_offset_top_input").value);
-});
+const DEFAULT_SUBTITLE_APPEARANCE = {
+    position: -100,
+    fontSize: 26,
+    font: "Arial",
+    textColor: "rgba(255, 255, 255, 1)",
+    backgroundColor: "rgba(0, 0, 0, 0.7)"
+};
 
-shadow_root.getElementById("subtitle_font_size").addEventListener("input", function(){
-    subtitle_font_size = this.value;
-});
+function currentAppearance(){
+    return {
+        position: subtitle_offset_top,
+        fontSize: Number(subtitle_font_size),
+        font: subtitle_font,
+        textColor: subtitle_font_color,
+        backgroundColor: subtitle_background_color
+    };
+}
 
-shadow_root.getElementById("subtitle_font_color").addEventListener("input", function(){
-    subtitle_font_color = this.value;
-});
+function saveAppearance(){
+    chrome.storage.local.set({ subtitle_appearance: currentAppearance() });
+}
 
-shadow_root.getElementById("subtitle_background_color").addEventListener("input", function(){
-    subtitle_background_color = this.value;
-});
+function setFontControl(value){
+    const known = Array.from(subtitle_font_input.options).some(function(option){
+        return option.value === value && option.value !== "custom";
+    });
+    subtitle_font_input.value = known ? value : "custom";
+    custom_font_input.style.display = known ? "none" : "";
+    custom_font_input.value = known ? "" : value;
+    subtitle_font = value;
+}
 
-shadow_root.getElementById("subtitle_font").addEventListener("input", function(){
+function syncColorControl(control, value){
+    const parsed = parseSubtitleColor(value);
+    if (!parsed) return null;
+    control.picker.value = parsed.hex;
+    control.alpha.value = String(Math.round(parsed.alpha * 100));
+    control.alphaValue.textContent = control.alpha.value + "%";
+    control.text.value = parsed.rgba;
+    control.error.textContent = "";
+    control.text.removeAttribute("aria-invalid");
+    return parsed.rgba;
+}
+
+function colorFromControl(control){
+    const parsed = parseSubtitleColor(control.picker.value);
+    const alpha = Number(control.alpha.value) / 100;
+    const red = parseInt(parsed.hex.slice(1, 3), 16);
+    const green = parseInt(parsed.hex.slice(3, 5), 16);
+    const blue = parseInt(parsed.hex.slice(5, 7), 16);
+    return parseSubtitleColor(`rgba(${red}, ${green}, ${blue}, ${alpha})`).rgba;
+}
+
+function setControlColor(control, target){
+    const value = colorFromControl(control);
+    control.alphaValue.textContent = control.alpha.value + "%";
+    control.text.value = value;
+    if (target === "text") subtitle_font_color = value;
+    else subtitle_background_color = value;
+}
+
+function bindColorControl(control, target){
+    control.picker.addEventListener("input", function(){
+        setControlColor(control, target);
+    });
+    control.picker.addEventListener("change", saveAppearance);
+    control.alpha.addEventListener("input", function(){
+        setControlColor(control, target);
+    });
+    control.alpha.addEventListener("change", saveAppearance);
+    control.text.addEventListener("change", function(){
+        const parsed = syncColorControl(control, control.text.value);
+        if (!parsed) {
+            control.error.textContent = "Use HEX, RGB, or RGBA.";
+            control.text.setAttribute("aria-invalid", "true");
+            return;
+        }
+        if (target === "text") subtitle_font_color = parsed;
+        else subtitle_background_color = parsed;
+        saveAppearance();
+    });
+}
+
+function applyAppearance(appearance, persist){
+    const next = Object.assign({}, DEFAULT_SUBTITLE_APPEARANCE, appearance || {});
+    const position = Number(next.position);
+    const fontSize = Number(next.fontSize);
+    subtitle_offset_top = Number.isFinite(position) ? position : DEFAULT_SUBTITLE_APPEARANCE.position;
+    subtitle_font_size = Number.isFinite(fontSize) && fontSize > 0
+        ? String(fontSize)
+        : String(DEFAULT_SUBTITLE_APPEARANCE.fontSize);
+    subtitle_offset_top_input.value = String(subtitle_offset_top);
+    subtitle_font_size_input.value = subtitle_font_size;
+    setFontControl(String(next.font || DEFAULT_SUBTITLE_APPEARANCE.font));
+    subtitle_font_color = syncColorControl(fontColorControl, next.textColor) ||
+        syncColorControl(fontColorControl, DEFAULT_SUBTITLE_APPEARANCE.textColor);
+    subtitle_background_color = syncColorControl(backgroundColorControl, next.backgroundColor) ||
+        syncColorControl(backgroundColorControl, DEFAULT_SUBTITLE_APPEARANCE.backgroundColor);
+    if (persist) saveAppearance();
+}
+
+subtitle_offset_top_input.addEventListener("input", function(){
+    const value = Number(this.value);
+    if (Number.isFinite(value)) subtitle_offset_top = value;
+});
+subtitle_offset_top_input.addEventListener("change", saveAppearance);
+
+subtitle_font_size_input.addEventListener("input", function(){
+    const value = Number(this.value);
+    if (Number.isFinite(value) && value > 0) subtitle_font_size = String(value);
+});
+subtitle_font_size_input.addEventListener("change", saveAppearance);
+
+subtitle_font_input.addEventListener("change", function(){
+    custom_font_input.style.display = this.value === "custom" ? "" : "none";
+    if (this.value === "custom") {
+        custom_font_input.focus();
+        return;
+    }
     subtitle_font = this.value;
+    saveAppearance();
+});
+
+custom_font_input.addEventListener("input", function(){
+    if (this.value.trim()) subtitle_font = this.value.trim();
+});
+custom_font_input.addEventListener("change", saveAppearance);
+
+bindColorControl(fontColorControl, "text");
+bindColorControl(backgroundColorControl, "background");
+
+chrome.storage.local.get(["subtitle_appearance"], function(stored){
+    applyAppearance(stored.subtitle_appearance, false);
+});
+
+resetAppearanceButton.addEventListener("click", function(){
+    resetConfirmation.hidden = false;
+    cancelResetButton.focus();
+});
+cancelResetButton.addEventListener("click", function(){
+    resetConfirmation.hidden = true;
+    resetAppearanceButton.focus();
+});
+confirmResetButton.addEventListener("click", function(){
+    applyAppearance(DEFAULT_SUBTITLE_APPEARANCE, true);
+    resetConfirmation.hidden = true;
+    resetAppearanceButton.focus();
 });
 
 shadow_root.getElementById("s2t_enabled").addEventListener("change", function(){
@@ -2700,19 +4187,19 @@ function updateConverterStatus() {
     try {
         if (chineseConverter && chineseConverter.enabled === false) {
             statusElement.textContent = "S2T Disabled";
-            statusElement.style.color = "gray";
+            statusElement.style.color = "#52645a";
             return;
         }
         if (chineseConverter.openccLoaded && chineseConverter.converter) {
             statusElement.textContent = "OpenCC Ready";
-            statusElement.style.color = "green";
+            statusElement.style.color = "#146c43";
             return;
         }
         statusElement.textContent = "FAILED: OpenCC Not Available";
-        statusElement.style.color = "red";
+        statusElement.style.color = "#b42318";
     } catch (_e) {
         statusElement.textContent = "FAILED: Status Check Error";
-        statusElement.style.color = "red";
+        statusElement.style.color = "#b42318";
     }
 }
 
@@ -2720,7 +4207,7 @@ function updateConverterStatus() {
 shadow_root.getElementById("reload_converter").addEventListener("click", function(){
     const statusElement = shadow_root.getElementById("converter_status");
     statusElement.textContent = "Reloading...";
-    statusElement.style.color = "orange";
+    statusElement.style.color = "#9a5b00";
     if (typeof chrome !== 'undefined' && chrome.runtime) {
         new Promise((resolve, reject) => {
             chrome.runtime.sendMessage({ action: 'reinject_opencc' }, response => {
@@ -2732,11 +4219,11 @@ shadow_root.getElementById("reload_converter").addEventListener("click", functio
             .then(() => setTimeout(updateConverterStatus, 1200))
             .catch(() => {
                 statusElement.textContent = "Reload Failed";
-                statusElement.style.color = "red";
+                statusElement.style.color = "#b42318";
             });
     } else {
         statusElement.textContent = "Reload Failed";
-        statusElement.style.color = "red";
+        statusElement.style.color = "#b42318";
     }
 });
 
@@ -2764,10 +4251,9 @@ const ASSRT_BASE = "https://api.assrt.net";
 const OS_API_BASE = "https://api.opensubtitles.com";
 const OS_LANG_CODES = { 'zh-hans':'zh-cn', 'zh-hant':'zh-tw' };
 
-let search_results_cache = [];
-let search_result_loading = false;
-// last successfully downloaded archive/file; page-lifetime only, one entry
-let last_download_cache = null;
+const SEARCH_PAGE_SIZE = 30;
+const searchState = createSearchState();
+let last_search = null;
 
 function clean_page_title(raw){
     if (!raw) return '';
@@ -2838,20 +4324,27 @@ function local_storage_keys(){
 function set_subtitle_source(text){
     if (!errorMessage) return;
     errorMessage.textContent = text ? `Source: ${text}` : "";
-    errorMessage.style.color = text ? "green" : "";
+    errorMessage.classList.toggle("source_status", Boolean(text));
+    errorMessage.style.color = text ? "#146c43" : "";
     errorMessage.title = text || "";
 }
 
 function set_search_status(text, color){
     search_status_elem.textContent = text;
-    search_status_elem.style.color = color || '';
+    const tones = {
+        green: "#146c43",
+        red: "#b42318",
+        orange: "#9a5b00",
+        gray: "#52645a"
+    };
+    search_status_elem.style.color = tones[color] || color || '';
 }
 
 // loose language filter for scrape providers listing tags like 简/繁/双语
 function scrape_lang_ok(text, language){
     if (language === 'all') return true;
     if (language === 'zh-hans') return /简|CHS|双语|雙語|中[文字]/i.test(text);
-    if (language === 'zh-hant') return /繁|CHT|中[文字]/i.test(text);
+    if (language === 'zh-hant') return /繁|CHT|双语|雙語|中[文字]/i.test(text);
     if (language === 'en') return /英[字文语]|English|双语|雙語/i.test(text);
     return true;
 }
@@ -2876,7 +4369,7 @@ function parse_json_or_throw(text, provider){
 async function search_opensubtitles(query, language){
     const keys = await local_storage_keys();
     if (!keys.os_api_key) {
-        throw new SubtitleError('OpenSubtitles API key missing — expand "API keys" below, save it, then retry.', 'API_KEY_MISSING');
+        throw new SubtitleError('OpenSubtitles API key missing — open Settings, save it, then retry.', 'API_KEY_MISSING');
     }
     const fetch_page = async function(with_lang){
         const params = new URLSearchParams();
@@ -2927,7 +4420,7 @@ function assrt_lang_ok(sub, language){
 async function search_assrt(query, language){
     const keys = await local_storage_keys();
     if (!keys.assrt_token) {
-        throw new SubtitleError('assrt token missing — expand "API keys" below, save it, then retry.', 'API_KEY_MISSING');
+        throw new SubtitleError('Shooter token missing — open Settings, save it, then retry.', 'API_KEY_MISSING');
     }
     const resp = await bg_fetch_text({
         url: ASSRT_BASE + '/v1/sub/search?token=' + encodeURIComponent(keys.assrt_token) + '&q=' + encodeURIComponent(query) + '&cnt=20',
@@ -2977,9 +4470,85 @@ async function subhd_fetch_text(path){
     throw new SubtitleError('SubHD search failed — ' + summary, 'NETWORK_ERROR');
 }
 
-async function search_subhd(query, language){
-    const { response: resp, base } = await subhd_fetch_text('/search/' + encodeURIComponent(query));
-    const doc = new DOMParser().parseFromString(resp.text, 'text/html');
+// [reason] both SubHD layouts render one subtitle per row; the download count lives
+// next to the .bi-download icon on search pages but in the right-hand column of /d/ pages
+function subhd_downloads(container){
+    if (!container) return 0;
+    const icon = container.querySelector('.bi-download');
+    if (icon && icon.nextElementSibling) {
+        return parseInt(icon.nextElementSibling.textContent, 10) || 0;
+    }
+    const cell = container.querySelector('.text-end.text-secondary');
+    return cell ? (parseInt(cell.textContent, 10) || 0) : 0;
+}
+
+function subhd_row_result(container, code, title, language, base){
+    if (!container || !title) return null;
+    const context = ((container.textContent) || '').slice(0, 800);
+    // [reason] SubHD marks languages as <span class="p-1 fw-bold">简体</span>;
+    // reading those tags avoids matching language words inside the release title
+    const langTags = Array.from(new Set(
+        Array.from(container.querySelectorAll('span.p-1.fw-bold'))
+            .map(function(span){ return (span.textContent || '').trim(); })
+            .filter(Boolean)
+    ));
+    // fallback: a markup change hides every tag, so keep the loose text check
+    const langOk = langTags.length
+        ? subhdLanguageMatch(langTags, language)
+        : scrape_lang_ok(context, language);
+    if (!langOk) return null;
+    // [reason] SubHD lists each format as <span class="p-1 text-secondary">ASS</span>;
+    // SUP (image subtitles) cannot be parsed, so drop results that offer only SUP
+    const formatTokens = Array.from(container.querySelectorAll('span.text-secondary'))
+        .map(function(span){ return (span.textContent || '').trim().toUpperCase(); })
+        .filter(function(text){ return /^(SRT|ASS|SSA|VTT|SUP)$/.test(text); });
+    if (!hasUsableSubtitleFormat(formatTokens)) return null;
+    const langLabels = (langTags.length
+        ? langTags
+        : Array.from(new Set(context.match(/简体|繁体|英语|双语/g) || [])))
+        .map(subhdLanguageLabel);
+    const metaParts = Array.from(new Set(langLabels)).concat(formatTokens);
+    const downloads = subhd_downloads(container);
+    if (downloads) metaParts.push('⬇ ' + downloads);
+    return {
+        title: title,
+        meta: metaParts.length ? metaParts.join(' · ') : 'SubHD',
+        downloads: downloads,
+        pay: { kind: 'subhd', id: code, item: base + '/a/' + code }
+    };
+}
+
+// distinct /d/<id> titles a search page links, most-mentioned first
+function subhd_candidates(doc, query){
+    const counts = {};
+    const titles = {};
+    const order = [];
+    Array.from(doc.querySelectorAll('div.bg-white.shadow-sm.rounded-3.mb-4')).forEach(function(card){
+        const dAnchor = card.querySelector('a[href^="/d/"]');
+        const match = dAnchor && (dAnchor.getAttribute('href') || '').match(/\/d\/(\d+)/);
+        if (!match) return;
+        const id = match[1];
+        if (!counts[id]) {
+            counts[id] = 0;
+            order.push(id);
+            // [reason] /d/ poster links have no text; the bold /a/ is the work title,
+            // while later /a/ links are release names. Poster alt is a safe fallback.
+            const titleAnchor = card.querySelector('.float-start.f16.fw-bold a[href^="/a/"]');
+            const poster = dAnchor.querySelector('img[alt]');
+            const text = titleAnchor ? (titleAnchor.textContent || '').trim() : '';
+            const alt = poster ? (poster.getAttribute('alt') || '').trim() : '';
+            const title = subhdTitleForQuery(text, alt, query);
+            if (title) titles[id] = title;
+        }
+        counts[id] += 1;
+    });
+    return order
+        .map(function(id){ return { id: id, title: titles[id] || ('SubHD #' + id), count: counts[id] }; })
+        .sort(function(a, b){ return b.count - a.count; })
+        .slice(0, 5);
+}
+
+function subhd_search_rows(doc, language, base){
     const anchors = Array.from(doc.querySelectorAll('a[href^="/a/"]'));
     // [reason] each result row links the same /a/<code> twice (movie name + edition line);
     // keep the longest anchor text per code so the release/edition line wins
@@ -2995,35 +4564,69 @@ async function search_subhd(query, language){
     }
     const results = [];
     for (const code in byCode) {
-        if (results.length >= 30) break;
         const entry = byCode[code];
-        if (!entry.text) continue;
         // [reason] scope to a single result row: `table` would cover every row, so a
         // SUP-only result would inherit a neighbour's ASS tag and survive filtering
         const container = entry.anchor.closest('.bg-white, tr, li, .row') || entry.anchor.closest('div') || entry.anchor;
-        const context = ((container && container.textContent) || '').slice(0, 800);
-        if (!scrape_lang_ok(context, language)) continue;
-        // [reason] SubHD lists each format as <span class="p-1 text-secondary">ASS</span>;
-        // SUP (image subtitles) cannot be parsed, so drop results that offer only SUP
-        const formatTokens = Array.from(container.querySelectorAll('span.text-secondary'))
-            .map(function(span){ return (span.textContent || '').trim().toUpperCase(); })
-            .filter(function(text){ return /^(SRT|ASS|SSA|VTT|SUP)$/.test(text); });
-        if (!hasUsableSubtitleFormat(formatTokens)) continue;
-        const metaParts = Array.from(new Set(context.match(/简体|繁体|英语|双语/g) || [])).concat(formatTokens);
-        // [reason] the download-count span sits right after the bi-download SVG; sort by it below
-        const dlNode = container.querySelector('.bi-download') && container.querySelector('.bi-download').nextElementSibling;
-        const downloads = dlNode ? (parseInt(dlNode.textContent, 10) || 0) : 0;
-        if (downloads) metaParts.push('⬇ ' + downloads);
-        results.push({
-            title: entry.text,
-            meta: metaParts.length ? metaParts.join(' · ') : 'SubHD',
-            downloads: downloads,
-            pay: { kind: 'subhd', id: code, item: base + '/a/' + code }
-        });
+        const result = subhd_row_result(container, code, entry.text, language, base);
+        if (result) results.push(result);
     }
     results.sort(function(a, b){ return b.downloads - a.downloads; });
+    return results.slice(0, SEARCH_PAGE_SIZE);
+}
+
+// /d/ pages list every subtitle of one title (one season), grouped by 第 N 集
+function subhd_detail_rows(doc, language, base){
+    const results = [];
+    const seen = {};
+    let episode = '';
+    const nodes = doc.querySelectorAll('.rounded-3.mb-5 .px-3.py-1, .rounded-3.mb-5 .row.pt-2.mb-2');
+    for (const node of nodes) {
+        const text = (node.textContent || '').trim();
+        if (!node.classList.contains('row')) {
+            // [reason] section headers are 第 N 集 and, on some titles, 合集; any header
+            // sets the label so pack rows stop inheriting the previous episode
+            if (text) episode = text;
+            continue;
+        }
+        const anchor = node.querySelector('a[href^="/a/"]');
+        const codeMatch = anchor ? (anchor.getAttribute('href') || '').match(/\/a\/([A-Za-z0-9]+)/) : null;
+        if (!codeMatch || seen[codeMatch[1]]) continue;
+        const title = (anchor.textContent || '').trim();
+        const result = subhd_row_result(node, codeMatch[1], title, language, base);
+        if (!result) continue;
+        result.episode = episode;
+        seen[codeMatch[1]] = true;
+        results.push(result);
+    }
     return results;
 }
+
+async function subhd_load_detail(id, language){
+    const { response: resp, base } = await subhd_fetch_text('/d/' + id);
+    const doc = new DOMParser().parseFromString(resp.text, 'text/html');
+    const results = subhd_detail_rows(doc, language, base);
+    // [reason] empty means the layout moved; let the caller fall back to search rows
+    if (!results.length) throw new SubtitleError('SubHD detail page had no usable subtitles.', 'PARSE_ERROR');
+    return results;
+}
+
+async function search_subhd(query, language){
+    const { response: resp, base } = await subhd_fetch_text('/search/' + encodeURIComponent(query));
+    const doc = new DOMParser().parseFromString(resp.text, 'text/html');
+    const candidates = subhd_candidates(doc, query);
+    // [reason] one title = no ambiguity; several = let the user pick, because search
+    // cards mix seasons and unrelated titles (e.g. Breaking Bad → 4 seasons + a film)
+    if (candidates.length === 1) {
+        try {
+            return { candidates: candidates, results: await subhd_load_detail(candidates[0].id, language), detail: true };
+        } catch (_error) {
+            // fall through to the first search page
+        }
+    }
+    return { candidates: candidates, results: subhd_search_rows(doc, language, base), detail: false };
+}
+
 
 function run_search(provider, query, language){
     switch (provider) {
@@ -3140,17 +4743,17 @@ function base64_to_utf8_text(base64){
     return new TextDecoder('utf-8').decode(bytes);
 }
 
-async function apply_result_file(file, progressIndicator){
+async function apply_result_file(file, progressIndicator, archiveOptions){
     progressIndicator.updateProgress(30, 'Checking file type...');
     const head = base64_head_bytes(file.base64, 6);
     if (head[0] === 0x52 && head[1] === 0x61 && head[2] === 0x72 && head[3] === 0x21) {
         // Rar!
-        await handleArchiveFile(base64_to_blob(file.base64), progressIndicator);
+        await handleArchiveFile(base64_to_blob(file.base64), progressIndicator, archiveOptions);
     } else if (head[0] === 0x37 && head[1] === 0x7A && head[2] === 0xBC && head[3] === 0xAF && head[4] === 0x27 && head[5] === 0x1C) {
         // 7z: 37 7A BC AF 27 1C
-        await handleArchiveFile(base64_to_blob(file.base64), progressIndicator);
+        await handleArchiveFile(base64_to_blob(file.base64), progressIndicator, archiveOptions);
     } else if (head[0] === 0x50 && head[1] === 0x4B) {
-        await handleZipFile(file.base64, progressIndicator);
+        await handleZipFile(file.base64, progressIndicator, archiveOptions);
     } else {
         progressIndicator.updateProgress(70, 'Parsing subtitles...');
         await parse_subtitles(base64_to_utf8_text(file.base64));
@@ -3158,7 +4761,6 @@ async function apply_result_file(file, progressIndicator){
     progressIndicator.updateProgress(100, 'Loaded!');
 }
 
-// 14x14 "archive + check" mark shown on the result whose download is cached
 function create_cached_icon(){
     const NS = 'http://www.w3.org/2000/svg';
     const svg = document.createElementNS(NS, 'svg');
@@ -3189,38 +4791,140 @@ function create_cached_icon(){
     return svg;
 }
 
-// [reason] the HTML `hidden` property does not reliably hide SVG elements, so
-// toggle display directly; aria-hidden keeps the mark out of the a11y tree
 function set_cached_icon_visible(icon, visible){
     icon.style.display = visible ? '' : 'none';
     icon.setAttribute('aria-hidden', visible ? 'false' : 'true');
 }
 
 function update_cached_icons(){
-    const key = last_download_cache && last_download_cache.key;
+    const key = searchState.downloadCache && searchState.downloadCache.key;
     const rows = search_results.querySelectorAll(".search_result_item");
     rows.forEach(function(row){
         const icon = row.querySelector(".result_cached_icon");
         if (!icon) return;
-        const result = search_results_cache[Number(row.dataset.index)];
+        const result = searchState.results[Number(row.dataset.index)];
         set_cached_icon_visible(icon, Boolean(key && result && getDownloadCacheKey(result.pay) === key));
     });
 }
 
-function render_search_results(results){
-    search_results_cache = results;
+// Clickable path above a list: every segment but the last jumps back a level
+function render_path(container, segments){
+    container.textContent = '';
+    segments.forEach(function(segment, index){
+        const last = index === segments.length - 1;
+        if (index) {
+            const sep = document.createElement("span");
+            sep.className = "search_path_sep";
+            sep.textContent = '›';
+            container.appendChild(sep);
+        }
+        if (!last && segment.on_click) {
+            const link = document.createElement("a");
+            link.href = '#';
+            link.textContent = segment.label;
+            if (segment.title) link.title = segment.title;
+            link.addEventListener('click', function(event){
+                event.preventDefault();
+                segment.on_click();
+            });
+            container.appendChild(link);
+            return;
+        }
+        const label = document.createElement("span");
+        label.className = last ? 'search_path_current' : 'search_path_label';
+        label.textContent = segment.label;
+        if (segment.title) label.title = segment.title;
+        container.appendChild(label);
+    });
+}
+
+function render_search_path(){
+    render_path(search_results_nav, searchState.path);
+}
+
+// group rows by their 第 N 集 label; 合集 first, unlabeled rows go last
+function subhd_episode_groups(rows){
+    const groups = [];
+    const byLabel = {};
+    rows.forEach(function(row){
+        const key = row.episode || '';
+        if (!byLabel[key]) {
+            byLabel[key] = { label: row.episode || '未分集', key: key, rows: [] };
+            groups.push(byLabel[key]);
+        }
+        byLabel[key].rows.push(row);
+    });
+    groups.sort(function(a, b){
+        const ka = subhdEpisodeSortKey(a.label);
+        const kb = subhdEpisodeSortKey(b.label);
+        if (ka === kb) return 0;
+        return ka < kb ? -1 : 1;
+    });
+    return groups;
+}
+
+// "All episodes" view: episodes ascending, page order kept inside each group
+function subhd_all_rows(rows, query){
+    const list = [];
+    subhd_episode_groups(rows).forEach(function(group){
+        group.rows.forEach(function(row){
+            list.push(Object.assign({}, row, {
+                title: row.episode ? subhdLabel(row.episode, query) + ' · ' + row.title : row.title
+            }));
+        });
+    });
+    return list;
+}
+
+function render_search_pager(total){
+    search_pager.textContent = '';
+    const pages = Math.ceil(total / SEARCH_PAGE_SIZE);
+    if (pages < 2) return;
+    function page_button(label, target, disabled){
+        const btn = document.createElement("button");
+        btn.type = 'button';
+        btn.textContent = label;
+        if (disabled) {
+            btn.disabled = true;
+        } else {
+            btn.addEventListener('click', function(){ render_search_results(searchState.results, target); });
+        }
+        search_pager.appendChild(btn);
+    }
+    page_button('Previous', searchState.page - 1, searchState.page <= 1);
+    const status = document.createElement("span");
+    status.className = "page_status";
+    status.textContent = searchState.page + " / " + pages;
+    status.setAttribute("aria-live", "polite");
+    search_pager.appendChild(status);
+    page_button('Next', searchState.page + 1, searchState.page >= pages);
+}
+
+function clear_search_results(){
     while (search_results.firstChild) {
         search_results.removeChild(search_results.firstChild);
     }
+}
+
+function render_search_results(results, page){
+    searchState.results = results;
+    const paged = getPagedResults(results, page, SEARCH_PAGE_SIZE);
+    searchState.page = paged.page;
+    clear_search_results();
+    render_search_path();
     if (results.length === 0) {
+        search_pager.textContent = '';
         const emptyBox = document.createElement("div");
         emptyBox.className = "search_empty_box";
         emptyBox.textContent = "No subtitles found.";
         search_results.appendChild(emptyBox);
         return;
     }
-    results.forEach(function(result, idx){
-        const row = document.createElement("div");
+    const start = (searchState.page - 1) * SEARCH_PAGE_SIZE;
+    paged.items.forEach(function(result, offset){
+        const idx = start + offset;
+        const row = document.createElement("button");
+        row.type = "button";
         row.className = "search_result_item";
         row.dataset.index = String(idx);
 
@@ -3230,9 +4934,15 @@ function render_search_results(results){
         titleText.className = "result_title_text";
         titleText.textContent = result.title;
         titleLine.appendChild(titleText);
+        const badges = document.createElement("span");
+        badges.className = "result_badges";
         const cachedIcon = create_cached_icon();
-        set_cached_icon_visible(cachedIcon, Boolean(last_download_cache && getDownloadCacheKey(result.pay) === last_download_cache.key));
-        titleLine.appendChild(cachedIcon);
+        set_cached_icon_visible(cachedIcon, Boolean(searchState.downloadCache && getDownloadCacheKey(result.pay) === searchState.downloadCache.key));
+        badges.appendChild(cachedIcon);
+        const isLoaded = Boolean(searchState.loadedKey && getDownloadCacheKey(result.pay) === searchState.loadedKey);
+        titleLine.appendChild(badges);
+        row.classList.toggle("selected_result", isLoaded);
+        if (isLoaded) row.setAttribute("aria-current", "true");
         row.appendChild(titleLine);
 
         const metaLine = document.createElement("span");
@@ -3245,60 +4955,272 @@ function render_search_results(results){
         });
         search_results.appendChild(row);
     });
+    render_search_pager(results.length);
+}
+
+// SubHD matched more than one title: show them instead of guessing
+function render_subhd_candidates(candidates){
+    searchState.subhd.candidates = candidates;
+    searchState.subhd.selected = null;
+    searchState.subhd.rows = [];
+    searchState.view = { kind: 'candidates' };
+    searchState.results = [];
+    searchState.page = 1;
+    searchState.path = [{ label: 'SubHD', on_click: candidates.length > 1 ? function(){ render_subhd_candidates(candidates); } : null }];
+    clear_search_results();
+    search_pager.textContent = '';
+    render_search_path();
+
+    const wrap = document.createElement("div");
+    wrap.className = "subtitle-chooser";
+    const header = document.createElement("div");
+    header.className = "subtitle-chooser-title";
+    header.textContent = 'SubHD matched several titles — pick one:';
+    wrap.appendChild(header);
+    const list = document.createElement("div");
+    list.className = "subtitle-chooser-list";
+    candidates.forEach(function(candidate){
+        append_chooser_row(list, {
+            text: candidate.title + '  ·  ' + candidate.count + (candidate.count === 1 ? ' result' : ' results'),
+            title: candidate.title,
+            on_click: function(){ load_subhd_candidate(candidate); }
+        });
+    });
+    wrap.appendChild(list);
+    search_results.appendChild(wrap);
+}
+
+function enter_subhd_title(candidate, rows){
+    searchState.subhd.selected = candidate;
+    searchState.subhd.rows = rows;
+    if (hasSubhdEpisodeLayer(rows)) {
+        render_subhd_episodes(candidate, rows);
+    } else {
+        render_subhd_episode(candidate, null);
+    }
+}
+
+function render_subhd_path(candidate, episode){
+    searchState.path = [
+        {
+            label: 'SubHD',
+            on_click: searchState.subhd.candidates.length > 1
+                ? function(){ render_subhd_candidates(searchState.subhd.candidates); }
+                : null
+        },
+        {
+            label: candidate.title,
+            on_click: hasSubhdEpisodeLayer(searchState.subhd.rows)
+                ? function(){ render_subhd_episodes(candidate, searchState.subhd.rows); }
+                : null
+        }
+    ];
+    if (episode !== undefined) {
+        const query = searchState.subhd.query;
+        const all_label = subhdLabel(
+            hasSubhdEpisodeLayer(searchState.subhd.rows) ? '全部集數' : '全部字幕',
+            query
+        );
+        searchState.path.push({ label: episode === null ? all_label : subhdLabel(episode || '未分集', query) });
+    }
+}
+
+function render_subhd_episodes(candidate, rows){
+    searchState.subhd.selected = candidate;
+    searchState.subhd.rows = rows;
+    searchState.view = { kind: 'episodes' };
+    searchState.results = [];
+    searchState.page = 1;
+    render_subhd_path(candidate);
+    clear_search_results();
+    search_pager.textContent = '';
+    render_search_path();
+
+    const wrap = document.createElement("div");
+    wrap.className = "subtitle-chooser";
+    const list = document.createElement("div");
+    list.className = "subtitle-chooser-list";
+    function add_row(text, target){
+        append_chooser_row(list, {
+            text: text,
+            on_click: function(){ render_subhd_episode(candidate, target); }
+        });
+    }
+    const query = searchState.subhd.query;
+    add_row(subhdLabel('全部集數', query) + ' · ' + subhdCountText(rows.length, query), null);
+    subhd_episode_groups(rows).forEach(function(group){
+        add_row(subhdLabel(group.label, query) + ' · ' + subhdCountText(group.rows.length, query), group.key);
+    });
+    wrap.appendChild(list);
+    search_results.appendChild(wrap);
+    set_search_status('', '');
+}
+
+// episode === null shows every row (episodes ascending); else one episode key
+function render_subhd_episode(candidate, episode){
+    const rows = searchState.subhd.rows;
+    const is_all = episode === null;
+    const list = is_all
+        ? subhd_all_rows(rows, searchState.subhd.query)
+        : rows.filter(function(row){ return (row.episode || '') === episode; });
+    searchState.subhd.selected = candidate;
+    searchState.view = { kind: is_all ? 'all' : 'episode', episode: is_all ? null : episode };
+    render_subhd_path(candidate, episode);
+    render_search_results(list, 1);
+    set_search_status('', '');
+}
+
+async function load_subhd_candidate(candidate){
+    if (searchState.loading) return;
+    searchState.loading = true;
+    searchState.subhd.selected = candidate;
+    const progress = new ProgressIndicator(search_progress_container, search_block);
+    progress.show('Loading ' + candidate.title + '...');
+    try {
+        const results = await subhd_load_detail(candidate.id, search_language.value);
+        enter_subhd_title(candidate, results);
+    } catch (error) {
+        console.error('SubHD title page failed:', error);
+        searchState.subhd.selected = null;
+        searchState.subhd.rows = [];
+        searchState.view = { kind: 'search_rows' };
+        searchState.path = [
+            {
+                label: 'SubHD',
+                on_click: searchState.subhd.candidates.length > 1
+                    ? function(){ render_subhd_candidates(searchState.subhd.candidates); }
+                    : null
+            },
+            { label: candidate.title }
+        ];
+        render_search_results(searchState.subhd.fallback);
+        set_search_status('SubHD title page failed — showing search page results instead.', 'red');
+    } finally {
+        progress.hide();
+        searchState.loading = false;
+    }
 }
 
 function mark_search_result_selected(row){
     const rows = search_results.querySelectorAll(".search_result_item");
     for (const other of rows) {
         other.classList.remove("selected_result");
+        other.removeAttribute("aria-current");
     }
     if (row) {
         row.classList.add("selected_result");
+        row.setAttribute("aria-current", "true");
     }
 }
 
 async function load_search_result(idx, row){
-    if (search_result_loading) return;
-    const result = search_results_cache[idx];
+    if (searchState.loading) return;
+    const result = searchState.results[idx];
     if (!result) return;
     if (!the_video_element) {
         set_search_status('Please select one of the videos above first.', 'red');
         return;
     }
     set_search_status('', '');
-    search_result_loading = true;
-    const progress = new ProgressIndicator(search_progress_container);
+    searchState.loading = true;
+    const progress = new ProgressIndicator(search_progress_container, search_block);
     progress.show('Downloading ' + result.pay.kind + ' subtitle...');
     try {
         const key = getDownloadCacheKey(result.pay);
         let file;
-        if (key && last_download_cache && last_download_cache.key === key) {
-            file = last_download_cache.file;
+        if (key && searchState.downloadCache && searchState.downloadCache.key === key) {
+            file = searchState.downloadCache.file;
         } else {
             file = await download_result(result.pay);
             if (key) {
                 // [reason] caches the downloaded bytes, not a parsed subtitle: a parse
                 // failure is fixed by picking another file, not by re-downloading
-                last_download_cache = { key: key, file: file };
+                searchState.downloadCache = { key: key, file: file };
                 update_cached_icons();
             }
         }
-        await apply_result_file(file, progress);
-        mark_search_result_selected(row);
-        set_search_status('Loaded: ' + result.title, 'green');
+        await apply_result_file(file, progress, { name: result.title, mode: 'results' });
+        searchState.loadedKey = getDownloadCacheKey(result.pay);
+        if (row && row.isConnected) {
+            mark_search_result_selected(row);
+        } else {
+            render_search_results(searchState.results, searchState.page);
+        }
         set_subtitle_source(result.title);
     } catch (error) {
-        console.error('Online subtitle load failed:', error);
-        set_search_status(error.message || 'Load failed', 'red');
+        // a cancelled picker has already reported itself; keep it out of the red path
+        if (!error || error.type !== 'SUBTITLE_CHOICE_CANCELLED') {
+            console.error('Online subtitle load failed:', error);
+            set_search_status(error.message || 'Load failed', 'red');
+        }
     } finally {
         progress.hide();
-        search_result_loading = false;
+        searchState.loading = false;
     }
 }
 
+let serviceKeys = {};
+function update_search_key_hint(){
+    const missingOpenSubtitles = search_provider.value === "opensubtitles" && !serviceKeys.os_api_key;
+    const missingAssrt = search_provider.value === "assrt" && !serviceKeys.assrt_token;
+    search_key_hint.hidden = !(missingOpenSubtitles || missingAssrt);
+    search_key_hint_text.textContent = missingOpenSubtitles
+        ? "OpenSubtitles needs an API key before you can search."
+        : missingAssrt
+            ? "Shooter needs an assrt token before you can search."
+            : "";
+}
+
+search_key_settings_button.addEventListener("click", function(){
+    activate_tab("settings");
+    requestAnimationFrame(function(){
+        servicesSection.scrollIntoView({ block: "nearest" });
+        os_api_key_input.focus();
+    });
+});
+
 // Provider change: rebuild language options (each provider only lists languages it can filter)
-search_provider.addEventListener("change", rebuild_search_language);
+search_provider.addEventListener("change", function(){
+    rebuild_search_language();
+    chrome.storage.local.set({
+        search_provider: search_provider.value,
+        search_language: search_language.value
+    });
+    update_search_key_hint();
+});
 rebuild_search_language();
+
+// [reason] SubHD rows are filtered by language at fetch time, so refetch the open
+// title instead of leaving stale episode counts under a new language selection
+search_language.addEventListener("change", async function(){
+    chrome.storage.local.set({
+        search_provider: search_provider.value,
+        search_language: search_language.value
+    });
+    const candidate = searchState.subhd.selected;
+    if (search_provider.value !== 'subhd' || !candidate || !searchState.subhd.rows.length) return;
+    if (searchState.loading) return;
+    const view = searchState.view;
+    searchState.loading = true;
+    const progress = new ProgressIndicator(search_progress_container, search_block);
+    progress.show('Loading ' + candidate.title + '...');
+    try {
+        const rows = await subhd_load_detail(candidate.id, search_language.value);
+        enter_subhd_title(candidate, rows);
+        if (view && view.kind === 'all') {
+            render_subhd_episode(candidate, null);
+        } else if (view && view.kind === 'episode' && view.episode
+            && rows.some(function(row){ return row.episode === view.episode; })) {
+            render_subhd_episode(candidate, view.episode);
+        }
+    } catch (error) {
+        console.error('SubHD language refresh failed:', error);
+        set_search_status('SubHD refresh failed — search again to apply the language.', 'red');
+    } finally {
+        progress.hide();
+        searchState.loading = false;
+    }
+});
 
 // Search
 shadow_root.getElementById("search_button").addEventListener("click", async function(event){
@@ -3312,21 +5234,71 @@ shadow_root.getElementById("search_button").addEventListener("click", async func
     }
     const provider = search_provider.value;
     const language = search_language.value;
+    if ((provider === "opensubtitles" && !serviceKeys.os_api_key) ||
+        (provider === "assrt" && !serviceKeys.assrt_token)) {
+        update_search_key_hint();
+        set_search_status("Add the required service key in Settings, then try again.", "red");
+        return;
+    }
+
+    // [reason] the archive picker takes over the results area; a new search ends it
+    if (searchState.archivePicker) {
+        const picker = searchState.archivePicker;
+        searchState.archivePicker = null;
+        picker.cancel();
+    }
 
     set_search_status('', '');
-    const progress = new ProgressIndicator(search_progress_container);
+    const progress = new ProgressIndicator(search_progress_container, search_block);
     progress.show('Searching ' + search_provider.options[search_provider.selectedIndex].text + '...');
     search_button.disabled = true;
+    const previous_search = last_search;
+    const prior_view = searchState.view;
+    const prior_candidate = searchState.subhd.selected;
     try {
-        const results = await run_search(provider, query, language);
-        render_search_results(results);
-        if (results.length > 0) {
-            set_search_status('Found ' + results.length + ' results — click one to load.', 'green');
+        const response = await run_search(provider, query, language);
+        const results = Array.isArray(response) ? response : (response.results || []);
+        resetSubhdState(searchState, {
+            query: query,
+            candidates: Array.isArray(response) ? [] : (response.candidates || []),
+            fallback: results
+        });
+        last_search = { provider: provider, query: query, language: language };
+        // [reason] a language-only re-search keeps the same titles, so reopen the
+        // title/episode the user was on instead of dropping to the picker
+        const restore_candidate = isLanguageOnlyChange(previous_search, last_search)
+            ? findSearchCandidate(searchState.subhd.candidates, prior_candidate)
+            : null;
+        if (restore_candidate) {
+            const rows = response && response.detail && searchState.subhd.candidates.length === 1
+                ? results
+                : await subhd_load_detail(restore_candidate.id, language);
+            enter_subhd_title(restore_candidate, rows);
+            if (prior_view && prior_view.kind === 'all') {
+                render_subhd_episode(restore_candidate, null);
+            } else if (prior_view && prior_view.kind === 'episode' && prior_view.episode !== null && prior_view.episode !== undefined
+                && rows.some(function(row){ return (row.episode || '') === prior_view.episode; })) {
+                render_subhd_episode(restore_candidate, prior_view.episode);
+            }
+        } else if (response && response.detail && searchState.subhd.candidates.length === 1) {
+            // single match: skip the title list and open its episodes
+            enter_subhd_title(searchState.subhd.candidates[0], results);
+        } else if (searchState.subhd.candidates.length > 1) {
+            // [reason] search pages mix several titles/seasons; let the user pick rather
+            // than guessing, then load only that title's /d/ page
+            render_subhd_candidates(searchState.subhd.candidates);
+            set_search_status('', '');
         } else {
+            searchState.view = { kind: 'search_rows' };
+            searchState.path = [{ label: search_provider.options[search_provider.selectedIndex].text }];
+            render_search_results(results);
             set_search_status('', '');
         }
     } catch (error) {
         console.error('Online search failed:', error);
+        resetSubhdState(searchState);
+        searchState.view = { kind: 'search_rows' };
+        searchState.path = [{ label: search_provider.options[search_provider.selectedIndex].text }];
         render_search_results([]);
         set_search_status(error.message || 'Search failed', 'red');
     } finally {
@@ -3344,10 +5316,25 @@ function update_keys_status(stored){
     keys_status_elem.style.color = '';
 }
 
-chrome.storage.local.get(['os_api_key', 'assrt_token'], function(stored){
+chrome.storage.local.get([
+    'os_api_key',
+    'assrt_token',
+    'search_provider',
+    'search_language'
+], function(stored){
+    serviceKeys = stored;
     if (stored.os_api_key) os_api_key_input.value = stored.os_api_key;
     if (stored.assrt_token) assrt_token_input.value = stored.assrt_token;
+    if (stored.search_provider && SEARCH_LANGS[stored.search_provider]) {
+        search_provider.value = stored.search_provider;
+        rebuild_search_language();
+    }
+    if (stored.search_language &&
+        Array.from(search_language.options).some(option => option.value === stored.search_language)) {
+        search_language.value = stored.search_language;
+    }
     update_keys_status(stored);
+    update_search_key_hint();
 });
 
 // Restore S2T toggle state (default on when unset)
@@ -3363,9 +5350,11 @@ shadow_root.getElementById("save_keys").addEventListener("click", function(){
     const osKey = os_api_key_input.value.trim();
     const assrtToken = assrt_token_input.value.trim();
     chrome.storage.local.set({ os_api_key: osKey, assrt_token: assrtToken }, function(){
-        update_keys_status({ os_api_key: osKey, assrt_token: assrtToken });
+        serviceKeys = { os_api_key: osKey, assrt_token: assrtToken };
+        update_keys_status(serviceKeys);
         keys_status_elem.textContent += ' (saved)';
-        keys_status_elem.style.color = 'green';
+        keys_status_elem.style.color = '#18794e';
+        update_search_key_hint();
     });
 });
 

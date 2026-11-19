@@ -171,6 +171,110 @@ function groupByEpisode(entries) {
     return list;
 }
 
+function archivePathLabel(name, maxLength = 20) {
+    const full = name || '壓縮檔';
+    if (!name || name.length <= maxLength) return { label: full, title: full };
+    const cut = name.slice(0, maxLength - 1).replace(/[\s.\-_\[\]]+$/, '');
+    return { label: cut + '…', title: name };
+}
+
+function hasSubhdEpisodeLayer(rows) {
+    const labels = new Set((rows || []).map(row => row.episode || ''));
+    return labels.size > 1 && Array.from(labels).some(Boolean);
+}
+
+// Display the work title in the query's language: SubHD cards carry a bilingual
+// poster alt ("盗梦空间 Inception") while the bold /a/ link is Chinese-only.
+function subhdTitleForQuery(title, alt, query) {
+    const primary = String(title || '').trim();
+    const fallback = primary || String(alt || '').trim();
+    if (/[\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF]/.test(String(query || ''))) {
+        return fallback;
+    }
+    const latin = String(alt || '')
+        .replace(/[\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF]+/g, ' ')
+        .replace(/[《》「」『』【】〔〕（）〈〉、，。：；！？·～—…“”‘’]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    return /[A-Za-z]/.test(latin) ? latin : fallback;
+}
+
+// SubHD episode labels are scraped Chinese; show them in the query's language.
+function subhdLabel(text, query) {
+    const label = String(text || '');
+    if (/[\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF]/.test(String(query || ''))) return label;
+    if (label === '全部集數') return 'All episodes';
+    if (label === '全部字幕') return 'All subtitles';
+    if (label === '未分集') return 'Unlabeled';
+    const collection = label.match(/^合集\s*(.*)$/);
+    if (collection) return 'Collection' + (collection[1] ? ' ' + collection[1] : '');
+    const episode = label.match(/^第\s*(\d+)\s*集$/);
+    if (episode) return 'Episode ' + episode[1];
+    return label;
+}
+
+function subhdCountText(count, query) {
+    if (/[\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF]/.test(String(query || ''))) {
+        return count + ' 筆';
+    }
+    return count + (count === 1 ? ' subtitle' : ' subtitles');
+}
+
+// SubHD labels each subtitle with its own language tags (简体/繁体/英语/双语).
+function subhdLanguageMatch(tags, language) {
+    if (language === 'all') return true;
+    const set = new Set(tags || []);
+    if (language === 'zh-hans') return set.has('简体') || set.has('双语');
+    if (language === 'zh-hant') return set.has('繁体') || set.has('双语');
+    if (language === 'en') return set.has('英语') || set.has('双语');
+    return false;
+}
+
+// Display labels keep SubHD's own wording, with Traditional characters for 繁體/雙語.
+const SUBHD_LANGUAGE_LABELS = { '繁体': '繁體', '双语': '雙語', '英语': 'English' };
+function subhdLanguageLabel(tag) {
+    return SUBHD_LANGUAGE_LABELS[tag] || tag;
+}
+
+// 合集 first, 第 N 集 ascending, anything unparsed last.
+function subhdEpisodeSortKey(label) {
+    const text = String(label || '');
+    if (text.indexOf('合集') !== -1) return -1;
+    const match = text.match(/第\s*(\d+)\s*集/);
+    return match ? parseInt(match[1], 10) : Number.POSITIVE_INFINITY;
+}
+
+function getPagedResults(results, page, size) {
+    const safePage = Math.max(1, page || 1);
+    const start = (safePage - 1) * size;
+    return { page: safePage, items: results.slice(start, start + size) };
+}
+
+async function runArchiveSelection(item, progress, load) {
+    try {
+        return await load(item);
+    } finally {
+        progress.hide();
+    }
+}
+
+function buildPickerBaseSegments(segments, leave) {
+    const list = segments || [];
+    return list.map(function(segment, index) {
+        const isCurrent = index === list.length - 1;
+        return {
+            label: segment.label,
+            title: segment.title,
+            on_click: segment.on_click || isCurrent
+                ? function() {
+                    leave();
+                    if (segment.on_click) segment.on_click();
+                }
+                : null
+        };
+    });
+}
+
 // Stable identity for a downloaded subtitle result; the provider prefix keeps
 // numeric IDs from different sources from colliding.
 function getDownloadCacheKey(pay) {
@@ -191,6 +295,46 @@ function hasUsableSubtitleFormat(formatTokens) {
     return tokens.some(t => SUBTITLE_FORMATS.indexOf(t) !== -1);
 }
 
+function parseSubtitleColor(value) {
+    const input = String(value || '').trim();
+    let red;
+    let green;
+    let blue;
+    let alpha = 1;
+    const hex = input.match(/^#([\da-f]{3,4}|[\da-f]{6}|[\da-f]{8})$/i);
+    const rgb = input.match(/^rgba?\(\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)(?:\s*,\s*(\d*(?:\.\d+)?))?\s*\)$/i);
+
+    if (hex) {
+        const raw = hex[1];
+        const expanded = raw.length < 5
+            ? raw.split('').map(char => char + char).join('')
+            : raw;
+        red = parseInt(expanded.slice(0, 2), 16);
+        green = parseInt(expanded.slice(2, 4), 16);
+        blue = parseInt(expanded.slice(4, 6), 16);
+        if (expanded.length === 8) alpha = parseInt(expanded.slice(6, 8), 16) / 255;
+    } else if (rgb) {
+        red = Number(rgb[1]);
+        green = Number(rgb[2]);
+        blue = Number(rgb[3]);
+        alpha = rgb[4] === undefined ? 1 : Number(rgb[4]);
+        if ([red, green, blue, alpha].some(number => !Number.isFinite(number)) ||
+            red > 255 || green > 255 || blue > 255 || alpha < 0 || alpha > 1) {
+            return null;
+        }
+    } else {
+        return null;
+    }
+
+    const toHex = number => Math.round(number).toString(16).padStart(2, '0');
+    const roundedAlpha = Math.round(alpha * 1000) / 1000;
+    return {
+        hex: '#' + toHex(red) + toHex(green) + toHex(blue),
+        alpha: roundedAlpha,
+        rgba: `rgba(${Math.round(red)}, ${Math.round(green)}, ${Math.round(blue)}, ${roundedAlpha})`
+    };
+}
+
 module.exports = {
     SUBTITLE_FORMATS,
     getDownloadCacheKey,
@@ -203,5 +347,17 @@ module.exports = {
     parseEpisode,
     compareEpisodes,
     shortenPaths,
-    groupByEpisode
+    groupByEpisode,
+    archivePathLabel,
+    hasSubhdEpisodeLayer,
+    subhdEpisodeSortKey,
+    subhdTitleForQuery,
+    subhdLabel,
+    subhdCountText,
+    subhdLanguageMatch,
+    subhdLanguageLabel,
+    getPagedResults,
+    runArchiveSelection,
+    buildPickerBaseSegments,
+    parseSubtitleColor
 };
